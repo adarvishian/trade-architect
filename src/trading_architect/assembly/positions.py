@@ -6,7 +6,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from trading_architect.config.defaults import FUTURES_POINT_VALUES
+from trading_architect.config.defaults import FUTURES_POINT_VALUES, OPTION_CONTRACT_MULTIPLIER
 from trading_architect.engines.formulas import delta_adjusted_notional
 from trading_architect.ingestion.parsing import is_assemblable_event
 from trading_architect.models.entities import (
@@ -75,7 +75,7 @@ def _leg_pnl_close(
         if prev_qty < 0:
             pnl = -pnl
     elif event.asset_type == AssetType.OPTION:
-        pnl = (event.price - leg.cost_basis) * closed_qty * 100
+        pnl = (event.price - leg.cost_basis) * closed_qty * OPTION_CONTRACT_MULTIPLIER
         if prev_qty < 0:
             pnl = -pnl
     else:
@@ -144,7 +144,7 @@ def apply_event(builder: PositionBuilder, event: TradeEvent) -> None:
         leg.premium_at_risk = 0.0
         leg.stop_risk = 0.0
     elif event.asset_type == AssetType.OPTION and leg.net_qty > 0:
-        leg.premium_at_risk = leg.net_qty * leg.cost_basis * 100
+        leg.premium_at_risk = leg.net_qty * leg.cost_basis * OPTION_CONTRACT_MULTIPLIER
     elif event.asset_type == AssetType.STOCK and leg.net_qty != 0 and event.stop_price:
         leg.stop_risk = abs(leg.net_qty) * abs(leg.cost_basis - event.stop_price)
     elif event.asset_type == AssetType.FUTURE and leg.net_qty != 0 and event.stop_price:

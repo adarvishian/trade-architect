@@ -10,6 +10,7 @@ from trading_architect.config.defaults import (
     DEFAULT_BASE_RISK_F,
     DEFAULT_KELLY_FRACTION,
     DEFAULT_LEVERAGE_CAP,
+    OPTION_CONTRACT_MULTIPLIER,
 )
 from trading_architect.engines.equity import build_equity_lookup
 from trading_architect.engines.formulas import fractional_risk_size
@@ -169,7 +170,7 @@ def _counterfactual_qty(
     elif entry.asset_type.value == "option":
         spot = entry.spot_at_entry or entry.entry_price
         delta = entry.option_delta if entry.option_delta is not None else 0.5
-        notional_per_unit = abs(delta) * 100 * spot
+        notional_per_unit = abs(delta) * OPTION_CONTRACT_MULTIPLIER * spot
         max_qty = (DEFAULT_LEVERAGE_CAP * equity_at_entry) / max(notional_per_unit, 1.0)
         target_qty = min(target_qty, max_qty)
 

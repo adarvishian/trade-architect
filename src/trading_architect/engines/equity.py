@@ -11,6 +11,7 @@ import pandas as pd
 
 from trading_architect.assembly.entries import ClosedTradeEntry
 from trading_architect.assembly.positions import futures_multiplier
+from trading_architect.config.defaults import OPTION_CONTRACT_MULTIPLIER
 from trading_architect.models.entities import AssetType, Position, PositionStatus, Silo, TradeEvent
 
 
@@ -138,7 +139,7 @@ def open_mtm_pnl(
             mark = marks_by_symbol.get(symbol, cost)
             asset_type = _leg_asset_type(symbol, pos, events_by_symbol)
             if asset_type == AssetType.OPTION:
-                pnl = (mark - cost) * qty * 100
+                pnl = (mark - cost) * qty * OPTION_CONTRACT_MULTIPLIER
             elif asset_type == AssetType.FUTURE:
                 mult = futures_multiplier(symbol)
                 pnl = (mark - cost) * qty * mult

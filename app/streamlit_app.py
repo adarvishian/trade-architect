@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from ui_helpers import cap_status_pct, render_governor_sidebar, silo_book_row
+from ui_helpers import cap_status_pct, render_governor_sidebar, show_ui_error, silo_book_row
 
 import trading_architect  # noqa: F401 — loads .env on import
 from trading_architect.bootstrap import (
@@ -40,7 +40,7 @@ from trading_architect.ingestion.robinhood_fetch import (
     stock_account_breakdown,
 )
 from trading_architect.ingestion.schwab_accounts import list_accounts
-from trading_architect.ingestion.schwab_client import schwab_connection_status, schwab_py_available
+from trading_architect.ingestion.schwab_auth import schwab_connection_status, schwab_py_available
 from trading_architect.models.entities import Silo
 
 load_env()
@@ -286,7 +286,7 @@ elif page == "Import Data":
                     except ImportError:
                         st.error("robin-stocks is not installed.")
                     except Exception as exc:
-                        st.error(f"Fetch failed: {exc}")
+                        show_ui_error(exc, context="Robinhood fetch & import")
 
         st.divider()
         st.subheader("Portfolio snapshot")
@@ -321,7 +321,7 @@ elif page == "Import Data":
                         )
                         st.session_state["rh_portfolio_snapshot"] = snapshot
                     except Exception as exc:
-                        st.error(f"Portfolio fetch failed: {exc}")
+                        show_ui_error(exc, context="Robinhood portfolio fetch")
 
         snapshot = st.session_state.get("rh_portfolio_snapshot")
         if snapshot:
@@ -419,7 +419,7 @@ elif page == "Import Data":
                     except SchwabAuthExpired as exc:
                         st.error(str(exc))
                     except Exception as exc:
-                        st.error(f"Portfolio fetch failed: {exc}")
+                        show_ui_error(exc, context="Schwab portfolio fetch")
 
         schwab_snapshot = st.session_state.get("schwab_portfolio_snapshot")
         if schwab_snapshot:
@@ -514,7 +514,7 @@ elif page == "Import Data":
                         if isinstance(exc, SchwabAuthExpired):
                             st.error(str(exc))
                         else:
-                            st.error(f"Fetch failed: {exc}")
+                            show_ui_error(exc, context="Schwab transaction fetch")
 
     st.subheader("Import history")
     log = repo.list_import_log(limit=20)
@@ -710,7 +710,12 @@ elif page == "Option Selector":
                     st.success(f"Fetched {len(snapshot.contracts)} contracts from Schwab.")
                     _display_option_results(result)
                 except Exception as exc:
-                    st.error(f"Chain fetch failed: {exc}")
+                    from trading_architect.ingestion.schwab_auth import SchwabAuthExpired
+
+                    if isinstance(exc, SchwabAuthExpired):
+                        st.error(str(exc))
+                    else:
+                        show_ui_error(exc, context="Schwab option chain fetch")
 
     if chain_file and st.button("Rank contracts", type="primary", key="opt_btn"):
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
@@ -1138,7 +1143,7 @@ elif page == "Settings":
             except SchwabAuthExpired as exc:
                 st.error(str(exc))
             except Exception as exc:
-                st.error(f"Could not refresh accounts: {exc}")
+                show_ui_error(exc, context="Schwab account refresh")
 
     if draft.schwab_account_hashes:
         st.caption("Friendly label → account hash (plain account numbers are never stored).")

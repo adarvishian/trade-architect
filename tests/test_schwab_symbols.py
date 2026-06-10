@@ -2,7 +2,7 @@
 
 import pytest
 
-from trading_architect.ingestion.schwab_symbols import from_occ, to_occ
+from trading_architect.ingestion.schwab_symbols import from_occ, parse_synthetic_option, to_occ
 
 
 @pytest.mark.parametrize(
@@ -24,3 +24,14 @@ def test_to_occ_passthrough_equity():
 
 def test_from_occ_compact_no_spaces():
     assert from_occ("TSLA251219C00400000") == "TSLA_2025-12-19_C_400.0"
+
+
+def test_parse_synthetic_option():
+    parsed = parse_synthetic_option("AAPL_2026-09-18_C_110.0")
+    assert parsed is not None
+    ticker, canonical, spec = parsed
+    assert ticker == "AAPL"
+    assert canonical == "AAPL_2026-09-18_C_110.0"
+    assert spec.strike == 110.0
+    assert spec.right == "C"
+    assert parse_synthetic_option("not-an-option") is None

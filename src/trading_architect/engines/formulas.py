@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from trading_architect.config.defaults import OPTION_CONTRACT_MULTIPLIER
+
 
 def dollar_risk_stock(entry: float, stop: float, qty: float, multiplier: float = 1.0) -> float:
     """A.1 — dollar risk for stock/futures leg."""
@@ -36,7 +38,10 @@ def delta_adjusted_notional(
     option_contracts: list of (contracts, delta) pairs.
     """
     stock_notional = shares * spot
-    option_notional = sum(contracts * delta * 100 * spot for contracts, delta in option_contracts)
+    option_notional = sum(
+        contracts * delta * OPTION_CONTRACT_MULTIPLIER * spot
+        for contracts, delta in option_contracts
+    )
     return stock_notional + option_notional
 
 

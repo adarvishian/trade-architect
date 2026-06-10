@@ -32,6 +32,9 @@ DEFAULT_EPOCHS: list[MethodologyEpoch] = [
     ),
 ]
 
+# Standard U.S. equity option contract size (100 shares per contract)
+OPTION_CONTRACT_MULTIPLIER = 100
+
 # Sizing defaults (Phase 1 synthesis + PRD Appendix A)
 DEFAULT_BASE_RISK_F = 0.01  # 1% of silo equity per trade
 DEFAULT_KELLY_FRACTION = 0.25

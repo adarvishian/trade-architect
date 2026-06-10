@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from trading_architect.config.defaults import OPTION_CONTRACT_MULTIPLIER
 from trading_architect.config.options_selector import (
     DEFAULT_OPTION_SELECTOR_CONFIG,
     IvAssumption,
@@ -348,7 +349,7 @@ def rank_contracts(
         greeks = _contract_greeks(contract, snapshot, premium)
         delta = abs(greeks["delta"])
         delta_notional = delta_adjusted_notional(0, snapshot.spot_price, [(1.0, delta)])
-        cost_eff = delta_notional / (premium * 100) if premium > 0 else 0
+        cost_eff = delta_notional / (premium * OPTION_CONTRACT_MULTIPLIER) if premium > 0 else 0
 
         theta = greeks["theta"]
         theta_drag = abs(theta) * inputs.expected_hold_days
@@ -463,7 +464,7 @@ def rank_contracts(
             f"premium ${premium:.2f}, score {row['composite']:.2f}. "
             f"At target ${inputs.target_price:.2f}: model value ${row['projected']:.2f} "
             f"({row['ret_pct']:+.0f}% return, {row['r_mult']:+.2f}R). "
-            f"Max loss = premium (${premium * 100:,.0f}/contract)."
+            f"Max loss = premium (${premium * OPTION_CONTRACT_MULTIPLIER:,.0f}/contract)."
         )
 
         ranked.append(
@@ -475,7 +476,7 @@ def rank_contracts(
                 projected_value_at_target=row["projected"],
                 projected_return_pct=row["ret_pct"],
                 projected_r_multiple=row["r_mult"],
-                max_loss=premium * 100,
+                max_loss=premium * OPTION_CONTRACT_MULTIPLIER,
                 delta_notional_per_contract=delta_adjusted_notional(
                     0, snapshot.spot_price, [(1.0, delta)]
                 ),

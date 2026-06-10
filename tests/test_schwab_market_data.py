@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from trading_architect.ingestion.schwab_market_data import (
+from trading_architect.ingestion.schwab_rest import (
     fetch_chain_snapshot,
     fetch_quotes,
-    occ_to_synthetic,
     parse_option_chain_response,
     parse_quotes_response,
-    synthetic_to_occ,
 )
+from trading_architect.ingestion.schwab_symbols import from_occ as occ_to_synthetic
+from trading_architect.ingestion.schwab_symbols import to_occ as synthetic_to_occ
 
 FIXTURES = Path(__file__).parent / "fixtures" / "schwab"
 

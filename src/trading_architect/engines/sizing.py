@@ -7,7 +7,7 @@ from enum import Enum
 
 from trading_architect.assembly.entries import extract_closed_entries
 from trading_architect.assembly.positions import futures_multiplier
-from trading_architect.config.defaults import DEFAULT_EPOCHS
+from trading_architect.config.defaults import DEFAULT_EPOCHS, OPTION_CONTRACT_MULTIPLIER
 from trading_architect.config.sizing import DEFAULT_SIZING_CONFIG, EquityTier, SizingConfig
 from trading_architect.engines.drawdown import attribution_aware_throttle
 from trading_architect.engines.formulas import (
@@ -102,7 +102,7 @@ def _risk_per_unit(candidate: CandidateTrade) -> tuple[float, str]:
     symbol = candidate.symbol or candidate.underlying
     if candidate.asset_type == AssetType.OPTION:
         premium = candidate.premium_per_contract or candidate.entry_price
-        rpu = premium * 100
+        rpu = premium * OPTION_CONTRACT_MULTIPLIER
         return rpu, "premium-at-risk (max loss = premium paid)"
 
     if candidate.stop_price is None:
@@ -119,7 +119,7 @@ def _notional_per_unit(candidate: CandidateTrade) -> float:
 
     if candidate.asset_type == AssetType.OPTION:
         delta = candidate.option_delta if candidate.option_delta is not None else 0.5
-        return abs(delta) * 100 * spot
+        return abs(delta) * OPTION_CONTRACT_MULTIPLIER * spot
 
     if candidate.asset_type == AssetType.FUTURE:
         return candidate.entry_price * futures_multiplier(symbol)

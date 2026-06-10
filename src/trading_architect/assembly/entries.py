@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from trading_architect.assembly.positions import futures_multiplier
-from trading_architect.config.defaults import DEFAULT_BASE_RISK_F
+from trading_architect.config.defaults import DEFAULT_BASE_RISK_F, OPTION_CONTRACT_MULTIPLIER
 from trading_architect.ingestion.base import resolve_epoch_id
 from trading_architect.models.entities import AssetType, Direction, Side, Silo, TradeEvent
 
@@ -59,7 +59,7 @@ def _leg_pnl(
 ) -> float:
     mult = futures_multiplier(symbol) if asset_type == AssetType.FUTURE else 1.0
     if asset_type == AssetType.OPTION:
-        pnl = (exit_price - entry_price) * qty * 100
+        pnl = (exit_price - entry_price) * qty * OPTION_CONTRACT_MULTIPLIER
     else:
         pnl = (exit_price - entry_price) * qty * mult
     if direction == Direction.SHORT:
@@ -77,7 +77,7 @@ def _initial_risk_and_basis(
 ) -> tuple[float, float, str]:
     """Return (initial_risk, risk_per_unit, risk_basis)."""
     if asset_type == AssetType.OPTION:
-        rpu = entry_price * 100
+        rpu = entry_price * OPTION_CONTRACT_MULTIPLIER
         return qty * rpu, rpu, "premium"
 
     mult = futures_multiplier(symbol) if asset_type == AssetType.FUTURE else 1.0
@@ -214,7 +214,7 @@ def extract_closed_entries(events: list[TradeEvent]) -> list[ClosedTradeEntry]:
         qty = item["quantity"]
         entry = item["entry_price"]
         if asset_type == AssetType.OPTION:
-            r = qty * entry * 100
+            r = qty * entry * OPTION_CONTRACT_MULTIPLIER
         else:
             mult = futures_multiplier(item["symbol"]) if asset_type == AssetType.FUTURE else 1.0
             r = abs(item["realized_pnl"])

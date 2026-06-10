@@ -2,10 +2,47 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import traceback
+
 import streamlit as st
 
+from trading_architect.config.defaults import DATA_DIR
 from trading_architect.engines.book_context import BookContext, SiloBookState
 from trading_architect.engines.drawdown import DrawdownGovernorState
+
+UI_LOG_PATH = DATA_DIR / "trading_architect_ui.log"
+logger = logging.getLogger("trading_architect.ui")
+
+
+def format_ui_error(exc: Exception, *, context: str) -> str:
+    """Return a user-safe message; log full traceback for unexpected errors."""
+    from trading_architect.ingestion.schwab_auth import SchwabAuthExpired
+
+    if isinstance(exc, SchwabAuthExpired):
+        return str(exc)
+    if isinstance(exc, ImportError):
+        return str(exc)
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return f"Network error during {context}. Check your connection and try again."
+    if isinstance(exc, (ValueError, KeyError, json.JSONDecodeError, TypeError)):
+        return f"Could not parse data during {context}. Check the input format and try again."
+
+    UI_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    logger.error("UI error during %s", context, exc_info=exc)
+    with UI_LOG_PATH.open("a", encoding="utf-8") as log_file:
+        log_file.write(f"\n--- {context} ---\n")
+        log_file.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+
+    return (
+        f"An unexpected error occurred during {context}. Details were logged to {UI_LOG_PATH.name}."
+    )
+
+
+def show_ui_error(exc: Exception, *, context: str) -> None:
+    """Display a typed error in Streamlit."""
+    st.error(format_ui_error(exc, context=context))
 
 
 def _governor_badge(state: DrawdownGovernorState) -> str:

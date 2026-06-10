@@ -11,7 +11,8 @@ from trading_architect.config.user_settings import AppSettings
 from trading_architect.ingestion.parsing import parse_option_from_text
 from trading_architect.ingestion.robinhood_fetch import consolidate_holdings
 from trading_architect.ingestion.schwab_auth import SchwabSession, get_client
-from trading_architect.ingestion.schwab_market_data import occ_to_synthetic, parse_synthetic_option
+from trading_architect.ingestion.schwab_symbols import from_occ as occ_to_synthetic
+from trading_architect.ingestion.schwab_symbols import parse_synthetic_option
 from trading_architect.models.entities import (
     AssetType,
     BrokerAccountBalance,

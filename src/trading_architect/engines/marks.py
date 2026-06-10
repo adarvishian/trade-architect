@@ -249,7 +249,7 @@ class SchwabMarksProvider:
 def default_marks_provider() -> MarksProvider:
     """Return Schwab provider when configured, else Null."""
     from trading_architect.config.env import schwab_credentials_configured
-    from trading_architect.ingestion.schwab_client import schwab_py_available, token_file_present
+    from trading_architect.ingestion.schwab_auth import schwab_py_available, token_file_present
 
     if schwab_py_available() and schwab_credentials_configured() and token_file_present():
         return SchwabMarksProvider()

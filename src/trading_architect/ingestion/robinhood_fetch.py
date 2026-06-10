@@ -364,7 +364,7 @@ def format_holding_label(holding: ConsolidatedHolding) -> str:
     """Display name: ticker for stock; expiry/strike/call|put for options."""
     if holding.asset_type == AssetType.STOCK:
         return holding.underlying
-    from trading_architect.ingestion.schwab_market_data import parse_synthetic_option
+    from trading_architect.ingestion.schwab_symbols import parse_synthetic_option
 
     parsed = parse_synthetic_option(holding.symbol)
     if parsed:
