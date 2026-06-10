@@ -466,13 +466,16 @@ def _option_description(underlying: str, spec: OptionSpec) -> str:
     return f"{underlying} {spec.expiry.month}/{spec.expiry.day}/{spec.expiry.year} {right} ${spec.strike:.2f}"
 
 
-def fetch_stock_orders(account: str, account_number: str | None = None) -> list[TradeEvent]:
+def fetch_stock_orders(
+    account: str, account_number: str | None = None
+) -> tuple[list[TradeEvent], list[ReviewQueueItem]]:
     rh = _require_robin_stocks()
     account_number = account_number or _account_number_for_label(account)
     orders = rh.get_all_stock_orders(account_number=account_number) or []
 
     events: list[TradeEvent] = []
-    for order in orders:
+    review: list[ReviewQueueItem] = []
+    for idx, order in enumerate(orders):
         if order.get("state") != "filled":
             continue
 
@@ -485,6 +488,14 @@ def fetch_stock_orders(account: str, account_number: str | None = None) -> list[
         price = float(order.get("average_price") or order.get("price", 0))
         symbol = _resolve_stock_symbol(order, rh)
         if not symbol:
+            review.append(
+                ReviewQueueItem(
+                    source_file="robinhood-api",
+                    row_index=idx,
+                    reason="stock symbol unresolved",
+                    raw_row=order,
+                )
+            )
             continue
         fees = float(order.get("fees") or 0)
 
@@ -504,16 +515,19 @@ def fetch_stock_orders(account: str, account_number: str | None = None) -> list[
                 raw_ref=f"api::stock_order::{order.get('id')}",
             )
         )
-    return events
+    return events, review
 
 
-def fetch_option_orders(account: str, account_number: str | None = None) -> list[TradeEvent]:
+def fetch_option_orders(
+    account: str, account_number: str | None = None
+) -> tuple[list[TradeEvent], list[ReviewQueueItem]]:
     rh = _require_robin_stocks()
     account_number = account_number or _account_number_for_label(account)
     orders = rh.get_all_option_orders(account_number=account_number) or []
 
     events: list[TradeEvent] = []
-    for order in orders:
+    review: list[ReviewQueueItem] = []
+    for idx, order in enumerate(orders):
         if order.get("state") != "filled":
             continue
 
@@ -532,7 +546,15 @@ def fetch_option_orders(account: str, account_number: str | None = None) -> list
 
         try:
             underlying, symbol, option_spec = _resolve_option_leg(order, leg, rh)
-        except Exception:
+        except Exception as exc:
+            review.append(
+                ReviewQueueItem(
+                    source_file="robinhood-api",
+                    row_index=idx,
+                    reason=f"option leg unresolved: {exc}",
+                    raw_row=order,
+                )
+            )
             continue
 
         events.append(
@@ -552,7 +574,7 @@ def fetch_option_orders(account: str, account_number: str | None = None) -> list
                 raw_ref=f"api::option_order::{order.get('id')}",
             )
         )
-    return events
+    return events, review
 
 
 def fetch_all(
@@ -567,11 +589,11 @@ def fetch_all(
     else:
         login_from_env()
     account_number = _account_number_for_label(account)
-    events = fetch_stock_orders(account, account_number=account_number) + fetch_option_orders(
-        account, account_number=account_number
-    )
+    stock_events, stock_review = fetch_stock_orders(account, account_number=account_number)
+    opt_events, opt_review = fetch_option_orders(account, account_number=account_number)
+    events = stock_events + opt_events
     events.sort(key=lambda e: e.timestamp)
-    return events, []
+    return events, stock_review + opt_review
 
 
 def _format_rh_date(dt: datetime) -> str:

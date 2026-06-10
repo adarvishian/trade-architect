@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
@@ -11,6 +12,15 @@ import pandas as pd
 from trading_architect.assembly.entries import ClosedTradeEntry
 from trading_architect.assembly.positions import futures_multiplier
 from trading_architect.models.entities import AssetType, Position, PositionStatus, Silo, TradeEvent
+
+
+@dataclass(frozen=True)
+class MarkFallbackStats:
+    """Counts of fallback pricing used in MTM equity."""
+
+    legs_at_cost_basis: int
+    delta_iv_fallbacks: int
+    missing_mark_symbols: tuple[str, ...]
 
 
 class EquitySnapshot:
@@ -44,15 +54,59 @@ def _marks_with_provider(
     events: list[TradeEvent],
     positions: list[Position],
     marks_provider=None,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], dict | None]:
     """Event-based marks overlaid with live marks when a provider is configured."""
     marks = _latest_marks_by_symbol(events)
     if marks_provider is None:
-        return marks
+        return marks, None
     live = marks_provider.marks_for(_open_position_symbols(positions))
     for sym, mark in live.items():
         marks[sym] = mark.price
-    return marks
+    return marks, live
+
+
+def mark_fallback_stats_for_book(
+    events: list[TradeEvent],
+    positions: list[Position],
+    marks_provider=None,
+) -> MarkFallbackStats:
+    """Fallback counts for all open positions using the latest marks provider."""
+    open_positions = [p for p in positions if p.status == PositionStatus.OPEN]
+    if not open_positions:
+        return MarkFallbackStats(0, 0, ())
+
+    all_events = [e for e in events if e.silo in {p.silo for p in open_positions}]
+    marks, live = _marks_with_provider(all_events, open_positions, marks_provider)
+    return compute_mark_fallback_stats(open_positions, marks, live)
+
+
+def compute_mark_fallback_stats(
+    positions: list[Position],
+    marks_by_symbol: dict[str, float],
+    live_marks: dict | None = None,
+) -> MarkFallbackStats:
+    """Count open legs priced at cost basis and delta IV fallbacks."""
+    missing: list[str] = []
+    legs_at_cost = 0
+    for pos in positions:
+        if pos.status != PositionStatus.OPEN:
+            continue
+        for symbol, qty in pos.leg_net_qty.items():
+            if qty == 0:
+                continue
+            if symbol not in marks_by_symbol:
+                legs_at_cost += 1
+                missing.append(symbol)
+
+    delta_iv = 0
+    if live_marks:
+        delta_iv = sum(1 for mark in live_marks.values() if getattr(mark, "iv_fallback", False))
+
+    return MarkFallbackStats(
+        legs_at_cost_basis=legs_at_cost,
+        delta_iv_fallbacks=delta_iv,
+        missing_mark_symbols=tuple(sorted(set(missing))),
+    )
 
 
 def _leg_asset_type(
@@ -122,7 +176,7 @@ def reconstruct_silo_equity_curve(
         cumulative_pnl += closed_pnl_by_date.get(d, 0.0)
         use_live = d == dates[-1]
         if use_live and marks_provider is not None:
-            marks = _marks_with_provider(silo_events, silo_positions, marks_provider)
+            marks, _ = _marks_with_provider(silo_events, silo_positions, marks_provider)
         else:
             marks = {
                 sym: price
@@ -230,7 +284,7 @@ def equity_metrics_for_silo(
         cumulative_pnl += closed_pnl_by_date.get(d, 0.0)
         use_live = d == all_dates[-1]
         if use_live and marks_provider is not None:
-            marks = _marks_with_provider(silo_events, silo_positions, marks_provider)
+            marks, _ = _marks_with_provider(silo_events, silo_positions, marks_provider)
         else:
             marks = {
                 sym: price

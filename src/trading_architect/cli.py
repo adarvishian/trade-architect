@@ -319,6 +319,17 @@ def main() -> None:
         if not marks:
             print("No marks available (Schwab not configured or fetch failed).")
             return
+        from trading_architect.engines.equity import compute_mark_fallback_stats
+
+        marks_by_price = {sym: m.price for sym, m in marks.items()}
+        fb = compute_mark_fallback_stats(positions, marks_by_price, marks)
+        if fb.legs_at_cost_basis or fb.delta_iv_fallbacks:
+            print(
+                f"Mark fallbacks: {fb.legs_at_cost_basis} leg(s) at cost basis, "
+                f"{fb.delta_iv_fallbacks} delta IV default(s)"
+            )
+            if fb.missing_mark_symbols:
+                print(f"  Missing marks: {', '.join(fb.missing_mark_symbols)}")
         for sym, mark in sorted(marks.items()):
             delta_str = f" δ={mark.delta:.3f}" if mark.delta is not None else ""
             print(f"{sym:30s} ${mark.price:>10.2f}{delta_str}  @ {mark.asof.isoformat()}")

@@ -20,6 +20,7 @@ class Mark:
     delta: float | None
     asof: datetime
     delayed: bool = False
+    iv_fallback: bool = False
 
 
 @runtime_checkable
@@ -75,12 +76,12 @@ def _delta_with_fallback(
     strike: float | None,
     right: str | None,
     dte: int | None,
-) -> float | None:
+) -> tuple[float | None, bool]:
     if delta is not None:
-        return delta
+        return delta, False
     parsed = _parse_option(symbol)
     if not parsed or spot is None or spot <= 0:
-        return None
+        return None, False
     _, expiry, opt_right, opt_strike = parsed
     use_strike = strike if strike is not None else opt_strike
     use_right = right or opt_right
@@ -88,10 +89,11 @@ def _delta_with_fallback(
         time_years = max(dte / 365.0, 1 / 365.0)
     else:
         time_years = max((expiry - date.today()).days / 365.0, 1 / 365.0)
+    iv_fallback = not (iv and iv > 0)
     vol = iv if iv and iv > 0 else 0.2
     from trading_architect.engines.options_pricing import bs_greeks
 
-    return bs_greeks(spot, use_strike, time_years, 0.05, vol, use_right)["delta"]
+    return bs_greeks(spot, use_strike, time_years, 0.05, vol, use_right)["delta"], iv_fallback
 
 
 class SchwabMarksProvider:
@@ -179,7 +181,7 @@ class SchwabMarksProvider:
                 if streamer_underlying := self._underlying_spot_from_cache(underlying):
                     spot = streamer_underlying
 
-        delta = _delta_with_fallback(
+        delta, iv_fallback = _delta_with_fallback(
             symbol=quote.symbol,
             delta=quote.delta,
             spot=spot,
@@ -196,6 +198,7 @@ class SchwabMarksProvider:
             delta=delta,
             asof=_naive_dt(quote.asof),
             delayed=quote.delayed,
+            iv_fallback=iv_fallback,
         )
 
     def _underlying_spot_from_cache(self, underlying: str) -> float | None:
@@ -224,7 +227,7 @@ class SchwabMarksProvider:
                 spot_by_underlying[sym.upper()] = mark.price
 
         for sym, mark in fetched.items():
-            delta = _delta_with_fallback(
+            delta, iv_fallback = _delta_with_fallback(
                 symbol=sym,
                 delta=mark.delta,
                 spot=spot_by_underlying.get(sym.split("_")[0]) if _is_option_symbol(sym) else None,
@@ -238,6 +241,7 @@ class SchwabMarksProvider:
                 price=mark.price,
                 delta=delta,
                 asof=mark.asof,
+                iv_fallback=iv_fallback,
             )
         return out
 

@@ -125,6 +125,52 @@ def test_fetch_option_orders_uses_created_at(monkeypatch):
     monkeypatch.setattr(rf, "_require_robin_stocks", lambda: rh)
     monkeypatch.setattr(rf, "_account_number_for_label", lambda _label: "111")
 
-    events = rf.fetch_option_orders("robinhood-roth")
+    events, review = rf.fetch_option_orders("robinhood-roth")
     assert len(events) == 1
     assert events[0].timestamp.year == 2026
+    assert review == []
+
+
+def test_unresolved_stock_order_goes_to_review_queue(monkeypatch):
+    rh = MagicMock()
+    rh.get_all_stock_orders.return_value = [
+        {
+            "id": "stk1",
+            "state": "filled",
+            "created_at": "2026-05-18T12:00:00Z",
+            "side": "buy",
+            "quantity": "10",
+            "average_price": "100.00",
+            "instrument": "https://api.robinhood.com/instruments/bad/",
+        }
+    ]
+    rh.get_symbol_by_url.side_effect = RuntimeError("network error")
+    monkeypatch.setattr(rf, "_require_robin_stocks", lambda: rh)
+    events, review = rf.fetch_stock_orders("robinhood-roth", account_number="111")
+    assert events == []
+    assert len(review) == 1
+    assert review[0].source_file == "robinhood-api"
+    assert "unresolved" in review[0].reason
+
+
+def test_unresolved_option_leg_goes_to_review_queue(monkeypatch):
+    rh = MagicMock()
+    rh.get_all_option_orders.return_value = [
+        {
+            "id": "opt-bad",
+            "state": "filled",
+            "created_at": "2026-05-18T12:00:00Z",
+            "chain_symbol": "TSLA",
+            "average_price": "14.33",
+            "quantity": "1",
+            "legs": [{"side": "buy", "quantity": "1", "option": "https://example.com/opt/"}],
+        }
+    ]
+    rh.request_get.side_effect = ValueError("bad instrument")
+    monkeypatch.setattr(rf, "_require_robin_stocks", lambda: rh)
+    monkeypatch.setattr(rf, "_account_number_for_label", lambda _label: "111")
+
+    events, review = rf.fetch_option_orders("robinhood-roth")
+    assert events == []
+    assert len(review) == 1
+    assert "option leg unresolved" in review[0].reason

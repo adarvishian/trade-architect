@@ -192,7 +192,10 @@ def enumerate_candidates(
     pool = [
         c
         for c in snapshot.contracts
-        if c.right == right and min_dte <= c.dte <= max_dte and _contract_premium(c)
+        if c.right == right
+        and c.dte >= inputs.expected_hold_days
+        and min_dte <= c.dte <= max_dte
+        and _contract_premium(c)
     ]
     if not pool:
         return []

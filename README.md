@@ -142,6 +142,9 @@ data/           Local DB, archived raw CSVs, .schwab_token.json (git-ignored)
 
 Requires **Python 3.11+**. CI runs on 3.11.
 
+Historical build audit (2026-05-26, with resolution table): [`Audit - Buildout vs PRD.md`](Audit%20-%20Buildout%20vs%20PRD.md).
+Repo improvement plan (2026-06-09): [`Repo Audit & Improvement Plan.md`](Repo%20Audit%20%26%20Improvement%20Plan.md).
+
 ```bash
 pip install -e ".[dev,schwab]"   # or use requirements.lock.txt (see Quick start)
 

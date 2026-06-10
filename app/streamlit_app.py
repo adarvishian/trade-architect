@@ -129,6 +129,16 @@ if page == "Dashboard":
             hide_index=True,
         )
 
+        fb = book.mark_fallbacks
+        if fb.legs_at_cost_basis or fb.delta_iv_fallbacks:
+            st.warning(
+                f"Mark fallbacks active: **{fb.legs_at_cost_basis}** open leg(s) priced at cost basis, "
+                f"**{fb.delta_iv_fallbacks}** delta estimate(s) using default IV (20%). "
+                "MTM equity may understate drawdown until live marks are available."
+            )
+            if fb.missing_mark_symbols:
+                st.caption(f"Missing marks: {', '.join(fb.missing_mark_symbols)}")
+
         review_count = len(repo.list_review_queue())
         if review_count:
             st.warning(f"{review_count} row(s) in the review queue — see **Review Queue**.")

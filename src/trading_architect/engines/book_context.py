@@ -11,7 +11,12 @@ from trading_architect.engines.drawdown import (
     compute_drawdown_pct,
     worst_governor_state,
 )
-from trading_architect.engines.equity import account_equity_metrics, equity_metrics_for_silo
+from trading_architect.engines.equity import (
+    MarkFallbackStats,
+    account_equity_metrics,
+    equity_metrics_for_silo,
+    mark_fallback_stats_for_book,
+)
 from trading_architect.engines.formulas import leverage_ratio, portfolio_heat
 from trading_architect.engines.marks import MarksProvider, default_marks_provider
 from trading_architect.models.entities import Position, Silo, TradeEvent
@@ -43,6 +48,7 @@ class BookContext:
     account_governor: DrawdownMetrics
     effective_drawdown_pct: float
     effective_governor: DrawdownMetrics
+    mark_fallbacks: MarkFallbackStats
 
     def drawdown_for_silo(self, silo: Silo) -> float:
         if silo == Silo.STOCK_OPTIONS:
@@ -164,6 +170,8 @@ def build_book_context(
         message=effective_gov.message,
     )
 
+    mark_fallbacks = mark_fallback_stats_for_book(events, positions, marks_provider)
+
     return BookContext(
         stock_options=stock,
         futures=fut,
@@ -173,4 +181,5 @@ def build_book_context(
         account_governor=account_gov,
         effective_drawdown_pct=effective_dd,
         effective_governor=effective_gov,
+        mark_fallbacks=mark_fallbacks,
     )

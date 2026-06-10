@@ -1,5 +1,22 @@
 # Trading Architect — Build Audit
 
+> **Resolution status (2026-06-09):** This document reflects the codebase as of **2026-05-26**. Several findings below were **fixed after this audit**. Do not re-implement them — see the resolution table.
+
+| Finding | Severity | Status | Fixed in |
+|---|---|---|---|
+| H-1 — `current_delta_notional` never computed | HIGH | **Fixed** | `assembly/positions.py` — `enrich_positions_with_marks` (docstring cites H-1, M-1); tested in `tests/test_position_enrichment.py` |
+| M-1 — Closed positions retain stale risk | MEDIUM | **Fixed** | `assembly/positions.py` — risk zeroed on leg close |
+| M-2 — Equity realized-only, not MTM | MEDIUM | **Fixed** | `engines/equity.py` — `open_mtm_pnl`, `_marks_with_provider`, live marks wired |
+| M-3 — Account peak = sum of silo peaks | MEDIUM | **Fixed** | `engines/equity.py` — `combined_account_equity_curve`; `book_context.py` uses `account_equity_metrics` |
+| M-4 — In-sample Kelly look-ahead | MEDIUM | **Fixed** | `engines/evaluation.py` — `_prior_epoch_optimal_f` for out-of-sample Kelly counterfactuals |
+| M-5 option selector greek fallback | Done caveat | **Fixed** | `engines/options_selector.py` — `_contract_greeks` fills via Black-Scholes |
+| AG-1 — Attribution needs MTM | Open gap | **Partially unblocked** | M-2 fix enables MTM; attribution wiring (AG-4) still pending |
+| L-1–L-4, AG-2–AG-4 | LOW / gap | **Open** | See §4 recommended fix order below |
+
+**Current source of truth for repo health:** [`Repo Audit & Improvement Plan.md`](Repo%20Audit%20%26%20Improvement%20Plan.md) (2026-06-09).
+
+---
+
 **Scope:** Adherence to *Phase 3 PRD v1.0* and code correctness of the current `src/trading_architect`, `app/`, and `tests/` tree.
 **Date:** 2026-05-26
 **Method:** Full read of every source module; ran the test suite (57 passed); independently verified Black–Scholes, optimal-f, and reproduced the flagged defects with live objects.
