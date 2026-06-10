@@ -43,18 +43,10 @@ class Repository:
         self.db = db or Database()
         self.db.initialize()
 
-class Repository:
-    def __init__(self, db: Database | None = None) -> None:
-        self.db = db or Database()
-        self.db.initialize()
-
-    def _load_dedup_index(
-        self, conn
-    ) -> tuple[set[str], dict[str, tuple[str, TradeEvent]]]:
+    def _load_dedup_index(self, conn) -> tuple[set[str], dict[str, tuple[str, TradeEvent]]]:
         """Return (natural_keys, fingerprint -> (event_id, event))."""
         rows = conn.execute(
-            "SELECT event_id, natural_key, content_fingerprint, payload_json "
-            "FROM trade_events"
+            "SELECT event_id, natural_key, content_fingerprint, payload_json FROM trade_events"
         ).fetchall()
         natural_keys: set[str] = set()
         by_fingerprint: dict[str, tuple[str, TradeEvent]] = {}
@@ -191,9 +183,7 @@ class Repository:
 
     def list_epochs(self) -> list[MethodologyEpoch]:
         with self.db.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM methodology_epochs ORDER BY start_date"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM methodology_epochs ORDER BY start_date").fetchall()
         return [row_to_epoch(r) for r in rows]
 
     def replace_positions(self, positions: list[Position]) -> None:
@@ -256,9 +246,7 @@ class Repository:
 
     def list_review_queue(self) -> list[ReviewQueueItem]:
         with self.db.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM review_queue ORDER BY created_at DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM review_queue ORDER BY created_at DESC").fetchall()
         return [row_to_review_item(r) for r in rows]
 
     def event_count(self) -> int:

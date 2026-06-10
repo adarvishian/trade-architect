@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -109,8 +109,11 @@ def parse_option_from_text(
         right = "C" if match.group("right").lower() == "call" else "P"
         strike = float(match.group("strike"))
         symbol = f"{ticker}_{expiry.isoformat()}_{right}_{strike}"
-        return AssetType.OPTION, symbol, ticker, OptionSpec(
-            right=right, strike=strike, expiry=expiry
+        return (
+            AssetType.OPTION,
+            symbol,
+            ticker,
+            OptionSpec(right=right, strike=strike, expiry=expiry),
         )
 
     match = SCHWAB_OPTION_PATTERN.match(text)
@@ -120,8 +123,11 @@ def parse_option_from_text(
         right = match.group("right").upper()
         strike = float(match.group("strike"))
         symbol = f"{ticker}_{expiry.isoformat()}_{right}_{strike}"
-        return AssetType.OPTION, symbol, ticker, OptionSpec(
-            right=right, strike=strike, expiry=expiry
+        return (
+            AssetType.OPTION,
+            symbol,
+            ticker,
+            OptionSpec(right=right, strike=strike, expiry=expiry),
         )
 
     ticker = (underlying_fallback or text.split()[0]).upper()

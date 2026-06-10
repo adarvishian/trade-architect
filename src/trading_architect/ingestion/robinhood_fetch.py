@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 
+from trading_architect.config.env import load_env
 from trading_architect.ingestion.parsing import is_valid_equity_ticker, normalize_ticker
 from trading_architect.models.entities import (
     AssetType,
@@ -566,9 +567,8 @@ def fetch_all(
     else:
         login_from_env()
     account_number = _account_number_for_label(account)
-    events = (
-        fetch_stock_orders(account, account_number=account_number)
-        + fetch_option_orders(account, account_number=account_number)
+    events = fetch_stock_orders(account, account_number=account_number) + fetch_option_orders(
+        account, account_number=account_number
     )
     events.sort(key=lambda e: e.timestamp)
     return events, []

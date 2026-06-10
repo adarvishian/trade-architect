@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from ui_helpers import cap_status_pct, render_governor_sidebar, silo_book_row
 
 import trading_architect  # noqa: F401 — loads .env on import
-from ui_helpers import cap_status_pct, render_governor_sidebar, silo_book_row
 from trading_architect.bootstrap import (
     build_app_book_context,
     create_repository,
@@ -21,8 +21,17 @@ from trading_architect.bootstrap import (
     import_schwab_fetch,
     sync_schwab_live_equity,
 )
-from trading_architect.config.env import load_env, rh_credentials_configured, schwab_credentials_configured
-from trading_architect.config.user_settings import AppSettings, app_settings_from_json, app_settings_to_json, diff_app_settings
+from trading_architect.config.env import (
+    load_env,
+    rh_credentials_configured,
+    schwab_credentials_configured,
+)
+from trading_architect.config.user_settings import (
+    AppSettings,
+    app_settings_from_json,
+    app_settings_to_json,
+    diff_app_settings,
+)
 from trading_architect.ingestion.robinhood_fetch import (
     fetch_portfolio_snapshot,
     format_holding_label,
@@ -83,7 +92,9 @@ page = st.sidebar.radio("Navigate", PAGES, index=0)
 render_governor_sidebar(book)
 
 st.title("Trading Architect")
-st.caption("Risk-adjusted position sizing & trade evaluation — import CSVs, size trades, review edge.")
+st.caption(
+    "Risk-adjusted position sizing & trade evaluation — import CSVs, size trades, review edge."
+)
 
 if page == "Dashboard":
     st.header("Dashboard")
@@ -129,7 +140,9 @@ if page == "Dashboard":
 
 elif page == "Import Data":
     st.header("Import Data")
-    csv_tab, roth_tab, schwab_tab = st.tabs(["CSV upload", "Robinhood API (Roth IRA)", "Schwab API"])
+    csv_tab, roth_tab, schwab_tab = st.tabs(
+        ["CSV upload", "Robinhood API (Roth IRA)", "Schwab API"]
+    )
 
     with csv_tab:
         st.write("Drop CSV exports from Robinhood, Schwab/thinkorswim, or Tradovate.")
@@ -147,7 +160,9 @@ elif page == "Import Data":
                 tmp.write(uploaded.getvalue())
                 tmp_path = Path(tmp.name)
 
-            result = import_and_assemble(tmp_path, broker=broker, account=account or None, repo=repo)
+            result = import_and_assemble(
+                tmp_path, broker=broker, account=account or None, repo=repo
+            )
             st.cache_resource.clear()
             st.success(
                 f"Imported **{result.imported}** events "
@@ -190,7 +205,7 @@ elif page == "Import Data":
         if not robin_stocks_available():
             st.warning(
                 "Install the optional dependency first: "
-                "`pip install robin-stocks` or `pip install -e \".[robinhood]\"`"
+                '`pip install robin-stocks` or `pip install -e ".[robinhood]"`'
             )
         else:
             st.success("robin-stocks is installed.")
@@ -235,7 +250,9 @@ elif page == "Import Data":
             if not robin_stocks_available():
                 st.error("Install robin-stocks before fetching.")
             elif not using_env and (not username or not password):
-                st.error("Enter Robinhood credentials or set RH_USERNAME / RH_PASSWORD in your environment.")
+                st.error(
+                    "Enter Robinhood credentials or set RH_USERNAME / RH_PASSWORD in your environment."
+                )
             else:
                 with st.spinner(f"Logging in and fetching {rh_account}..."):
                     try:
@@ -274,7 +291,9 @@ elif page == "Import Data":
                 ["robinhood-roth", "robinhood-individual", "robinhood-ira"],
                 default=["robinhood-roth", "robinhood-individual"],
             )
-            portfolio_submitted = st.form_submit_button("Fetch balances & holdings", type="secondary")
+            portfolio_submitted = st.form_submit_button(
+                "Fetch balances & holdings", type="secondary"
+            )
 
         if portfolio_submitted:
             if not robin_stocks_available():
@@ -342,7 +361,7 @@ elif page == "Import Data":
         )
         schwab_status = schwab_connection_status()
         if not schwab_status["installed"]:
-            st.warning("Install schwab-py: `pip install -e \".[schwab]\"`")
+            st.warning('Install schwab-py: `pip install -e ".[schwab]"`')
         elif not schwab_status["configured"]:
             st.warning("Set SCHWAB_API_KEY and SCHWAB_APP_SECRET in .env")
         elif not schwab_status["token"]:
@@ -407,10 +426,14 @@ elif page == "Import Data":
             ]
             st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
             c1, c2 = st.columns(2)
-            c1.metric("Total cash & equivalents", f"${schwab_snapshot.total_cash_and_equivalents:,.2f}")
+            c1.metric(
+                "Total cash & equivalents", f"${schwab_snapshot.total_cash_and_equivalents:,.2f}"
+            )
             c2.metric("Total MTM equity", f"${schwab_snapshot.total_portfolio_equity:,.2f}")
             if settings.schwab_live_equity_at:
-                st.caption(f"Governor using live equity (cached {settings.schwab_live_equity_at[:19]} UTC)")
+                st.caption(
+                    f"Governor using live equity (cached {settings.schwab_live_equity_at[:19]} UTC)"
+                )
 
             if schwab_snapshot.holdings:
                 hold_rows = []
@@ -427,7 +450,9 @@ elif page == "Import Data":
                     )
                 st.dataframe(pd.DataFrame(hold_rows), use_container_width=True, hide_index=True)
 
-            if st.button("Use total MTM equity as stock/options starting equity", key="schwab_use_equity"):
+            if st.button(
+                "Use total MTM equity as stock/options starting equity", key="schwab_use_equity"
+            ):
                 settings.starting_equity_stock_options = schwab_snapshot.total_portfolio_equity
                 sync_schwab_live_equity(repo, schwab_snapshot)
                 repo.save_app_settings(settings)
@@ -510,12 +535,16 @@ elif page == "Size a Trade":
 
     stop = premium = delta = None
     if asset_val == "option":
-        premium = st.number_input("Premium per contract", value=5.0, min_value=0.01, key="size_premium")
+        premium = st.number_input(
+            "Premium per contract", value=5.0, min_value=0.01, key="size_premium"
+        )
         delta = st.slider("Delta", 0.05, 0.95, 0.45, key="size_delta")
     else:
         stop = st.number_input("Stop price", value=95.0, min_value=0.01, key="size_stop")
 
-    atr = st.number_input("ATR (optional, vol normalization)", value=0.0, min_value=0.0, key="size_atr")
+    atr = st.number_input(
+        "ATR (optional, vol normalization)", value=0.0, min_value=0.0, key="size_atr"
+    )
 
     st.subheader("Book context")
     st.caption(
@@ -552,7 +581,12 @@ elif page == "Size a Trade":
                 st.warning(w)
         with st.expander("Layer breakdown"):
             layer_rows = [
-                {"layer": f"L{layer.layer}", "name": layer.name, "qty": round(layer.recommended_qty, 2), "detail": layer.detail}
+                {
+                    "layer": f"L{layer.layer}",
+                    "name": layer.name,
+                    "qty": round(layer.recommended_qty, 2),
+                    "detail": layer.detail,
+                }
                 for layer in rec.layers
             ]
             st.dataframe(pd.DataFrame(layer_rows), use_container_width=True)
@@ -561,7 +595,11 @@ elif page == "Option Selector":
     st.header("Option Selector")
     st.caption("Greeks-based contract ranking — expression optimization only (PRD §7.5)")
 
-    from trading_architect.engines.options_selector import OptionDirection, OptionSelectorInput, rank_contracts
+    from trading_architect.engines.options_selector import (
+        OptionDirection,
+        OptionSelectorInput,
+        rank_contracts,
+    )
     from trading_architect.ingestion.chain import parse_chain_csv
 
     c1, c2, c3 = st.columns(3)
@@ -718,9 +756,13 @@ elif page == "Current Positions":
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         if status_filter in ("open", "All"):
-            open_by_silo = df[df["status"] == "open"].groupby("silo").agg(
-                risk=("total_risk", "sum"),
-                notional=("notional", "sum"),
+            open_by_silo = (
+                df[df["status"] == "open"]
+                .groupby("silo")
+                .agg(
+                    risk=("total_risk", "sum"),
+                    notional=("notional", "sum"),
+                )
             )
             if not open_by_silo.empty:
                 st.subheader("Silo totals vs caps")
@@ -807,7 +849,9 @@ elif page == "Alpha Left on Table":
                 if seg.options_winner_analysis:
                     st.info(seg.options_winner_analysis.narrative)
 
-            drill = [seg for seg in report.segments if seg.rule == selected_rule and seg.contributions]
+            drill = [
+                seg for seg in report.segments if seg.rule == selected_rule and seg.contributions
+            ]
             if drill and st.checkbox("Show per-trade drill-down"):
                 for seg in drill:
                     st.write(f"**{seg.silo.value} / {seg.epoch_id}**")
@@ -824,7 +868,9 @@ elif page == "Alpha Left on Table":
                         }
                         for c in seg.contributions
                     ]
-                    st.dataframe(pd.DataFrame(contrib_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        pd.DataFrame(contrib_rows), use_container_width=True, hide_index=True
+                    )
         else:
             st.info("No closed trades found for evaluation.")
 
@@ -869,7 +915,9 @@ elif page == "Edge & Risk Review":
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Action", rec.action.value.replace("_", " "))
             m2.metric("Effective f", f"{rec.effective_risk_f:.2%}")
-            m3.metric("Kelly", f"{rec.current_kelly_fraction:.0%} → {rec.recommended_kelly_fraction:.0%}")
+            m3.metric(
+                "Kelly", f"{rec.current_kelly_fraction:.0%} → {rec.recommended_kelly_fraction:.0%}"
+            )
             m4.metric("Base f", f"{rec.current_base_f:.2%} → {rec.recommended_base_f:.2%}")
 
             if rec.withhold_reason:
@@ -893,7 +941,9 @@ elif page == "Edge & Risk Review":
                         "expectancy": round(rd.expectancy, 2) if rd else None,
                         "win_rate": f"{rd.win_rate:.0%}" if rd else None,
                         "optimal_f": round(seg.optimal_f_ci.point, 3) if seg.optimal_f_ci else None,
-                        "optimal_f_lower": round(seg.optimal_f_ci.lower, 3) if seg.optimal_f_ci else None,
+                        "optimal_f_lower": round(seg.optimal_f_ci.lower, 3)
+                        if seg.optimal_f_ci
+                        else None,
                         "step_up_ready": seg.sufficient_for_step_up,
                     }
                 )
@@ -911,7 +961,9 @@ elif page == "Review Queue":
 
 elif page == "Settings":
     st.header("Settings")
-    st.caption("All parameters user-inspectable and overridable — changes logged (PRD §7.3 FR-3.8, §8.6)")
+    st.caption(
+        "All parameters user-inspectable and overridable — changes logged (PRD §7.3 FR-3.8, §8.6)"
+    )
 
     from trading_architect.models.entities import MethodologyEpoch
 
@@ -934,23 +986,37 @@ elif page == "Settings":
             step=10_000.0,
             key="set_eq_fut",
         )
-        st.caption("Used for equity reconstruction, alpha-left counterfactuals, and sizing denominators.")
+        st.caption(
+            "Used for equity reconstruction, alpha-left counterfactuals, and sizing denominators."
+        )
 
     with tab_sizing:
         sc = draft.sizing
         c1, c2 = st.columns(2)
-        sc.base_risk_f = c1.number_input("Base risk f", value=float(sc.base_risk_f), format="%.4f", step=0.001)
-        sc.kelly_fraction = c2.number_input("Kelly fraction", value=float(sc.kelly_fraction), format="%.4f", step=0.05)
+        sc.base_risk_f = c1.number_input(
+            "Base risk f", value=float(sc.base_risk_f), format="%.4f", step=0.001
+        )
+        sc.kelly_fraction = c2.number_input(
+            "Kelly fraction", value=float(sc.kelly_fraction), format="%.4f", step=0.05
+        )
         c3, c4 = st.columns(2)
-        sc.heat_cap = c3.number_input("Heat cap", value=float(sc.heat_cap), format="%.4f", step=0.01)
-        sc.leverage_cap = c4.number_input("Leverage cap (×)", value=float(sc.leverage_cap), step=0.1)
+        sc.heat_cap = c3.number_input(
+            "Heat cap", value=float(sc.heat_cap), format="%.4f", step=0.01
+        )
+        sc.leverage_cap = c4.number_input(
+            "Leverage cap (×)", value=float(sc.leverage_cap), step=0.1
+        )
         st.subheader("Drawdown governor thresholds")
         d1, d2, d3 = st.columns(3)
-        sc.drawdown_soft = d1.number_input("Soft alert", value=float(sc.drawdown_soft), format="%.4f", step=0.01)
+        sc.drawdown_soft = d1.number_input(
+            "Soft alert", value=float(sc.drawdown_soft), format="%.4f", step=0.01
+        )
         sc.drawdown_throttle_start = d2.number_input(
             "Throttle start", value=float(sc.drawdown_throttle_start), format="%.4f", step=0.01
         )
-        sc.drawdown_hard = d3.number_input("Hard cap", value=float(sc.drawdown_hard), format="%.4f", step=0.01)
+        sc.drawdown_hard = d3.number_input(
+            "Hard cap", value=float(sc.drawdown_hard), format="%.4f", step=0.01
+        )
 
     with tab_risk:
         ar = draft.adaptive_risk
@@ -980,13 +1046,19 @@ elif page == "Settings":
                     value=end_val,
                     key=f"epoch_end_{epoch.epoch_id}",
                 )
-                new_label = st.text_input("Label", value=epoch.label, key=f"epoch_label_{epoch.epoch_id}")
-                new_notes = st.text_area("Notes", value=epoch.notes, key=f"epoch_notes_{epoch.epoch_id}")
+                new_label = st.text_input(
+                    "Label", value=epoch.label, key=f"epoch_label_{epoch.epoch_id}"
+                )
+                new_notes = st.text_area(
+                    "Notes", value=epoch.notes, key=f"epoch_notes_{epoch.epoch_id}"
+                )
                 if st.button("Update epoch", key=f"epoch_save_{epoch.epoch_id}"):
                     updated = MethodologyEpoch(
                         epoch_id=epoch.epoch_id,
                         start_date=new_start,
-                        end_date=None if new_end_raw >= date.today() and epoch.end_date is None else new_end_raw,
+                        end_date=None
+                        if new_end_raw >= date.today() and epoch.end_date is None
+                        else new_end_raw,
                         label=new_label,
                         notes=new_notes,
                     )

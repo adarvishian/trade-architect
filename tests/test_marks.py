@@ -3,7 +3,6 @@
 from datetime import datetime
 
 from trading_architect.engines.marks import Mark, NullMarksProvider, StaticMarksProvider
-from trading_architect.ingestion.schwab_market_data import fetch_quotes
 
 
 def test_null_marks_provider_returns_empty():

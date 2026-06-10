@@ -114,7 +114,9 @@ def apply_event(builder: PositionBuilder, event: TradeEvent) -> None:
         # Partial close — proportional P&L; overshoot opens opposite-direction lot
         closed_qty = min(abs(signed), abs(prev_qty))
         pnl = _leg_pnl_close(event, leg, closed_qty, prev_qty)
-        builder.realized_pnl += pnl - event.fees * (closed_qty / event.quantity if event.quantity else 1.0)
+        builder.realized_pnl += pnl - event.fees * (
+            closed_qty / event.quantity if event.quantity else 1.0
+        )
 
         overshoot = abs(signed) - closed_qty
         if overshoot > 0:
@@ -208,12 +210,8 @@ def builder_to_position(
     premium = sum(leg.premium_at_risk for leg in builder.legs.values())
     stop_risk = sum(leg.stop_risk for leg in builder.legs.values())
 
-    cost_basis = {
-        sym: leg.cost_basis for sym, leg in builder.legs.items() if leg.net_qty != 0
-    }
-    leg_net_qty = {
-        sym: leg.net_qty for sym, leg in builder.legs.items() if leg.net_qty != 0
-    }
+    cost_basis = {sym: leg.cost_basis for sym, leg in builder.legs.items() if leg.net_qty != 0}
+    leg_net_qty = {sym: leg.net_qty for sym, leg in builder.legs.items() if leg.net_qty != 0}
     account_leg_qty = {
         sym: dict(leg.account_qty)
         for sym, leg in builder.legs.items()
@@ -221,8 +219,14 @@ def builder_to_position(
     }
 
     delta_notional = 0.0
-    if status == PositionStatus.OPEN and spot_by_underlying is not None and latest_price_by_symbol is not None:
-        delta_notional = _compute_delta_notional(builder, spot_by_underlying, latest_price_by_symbol)
+    if (
+        status == PositionStatus.OPEN
+        and spot_by_underlying is not None
+        and latest_price_by_symbol is not None
+    ):
+        delta_notional = _compute_delta_notional(
+            builder, spot_by_underlying, latest_price_by_symbol
+        )
 
     closed_at = builder.closed_at
     if status == PositionStatus.CLOSED and builder.event_ids:
@@ -282,11 +286,7 @@ def assemble_positions(events: list[TradeEvent]) -> list[Position]:
             latest_price_by_symbol=latest_price_by_symbol,
         )
         # Set direction from net stock/future qty when available
-        net_stock = sum(
-            leg.net_qty
-            for sym, leg in builder.legs.items()
-            if leg.net_qty != 0
-        )
+        net_stock = sum(leg.net_qty for sym, leg in builder.legs.items() if leg.net_qty != 0)
         if net_stock > 0:
             pos.direction = Direction.LONG
         elif net_stock < 0:
@@ -380,9 +380,7 @@ def enrich_positions_with_marks(
                         break
 
         delta_notional = (
-            delta_adjusted_notional(stock_qty, spot or 0.0, option_contracts)
-            if spot
-            else 0.0
+            delta_adjusted_notional(stock_qty, spot or 0.0, option_contracts) if spot else 0.0
         )
         enriched.append(pos.model_copy(update={"current_delta_notional": delta_notional}))
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from trading_architect.assembly.positions import futures_multiplier
@@ -216,11 +216,7 @@ def extract_closed_entries(events: list[TradeEvent]) -> list[ClosedTradeEntry]:
         if asset_type == AssetType.OPTION:
             r = qty * entry * 100
         else:
-            mult = (
-                futures_multiplier(item["symbol"])
-                if asset_type == AssetType.FUTURE
-                else 1.0
-            )
+            mult = futures_multiplier(item["symbol"]) if asset_type == AssetType.FUTURE else 1.0
             r = abs(item["realized_pnl"])
             if r <= 0:
                 r = qty * entry * mult * DEFAULT_BASE_RISK_F

@@ -89,7 +89,9 @@ def _next_ladder_step(current: float, ladder: tuple[float, ...]) -> float | None
     return None
 
 
-def _drawdown_multiplier(drawdown_pct: float, config: AdaptiveRiskConfig) -> tuple[float, str | None]:
+def _drawdown_multiplier(
+    drawdown_pct: float, config: AdaptiveRiskConfig
+) -> tuple[float, str | None]:
     """Cap risk appetite under drawdown governor (FR-4.6)."""
     if drawdown_pct < config.drawdown_soft:
         return 1.0, None
@@ -100,7 +102,10 @@ def _drawdown_multiplier(drawdown_pct: float, config: AdaptiveRiskConfig) -> tup
             config.drawdown_hard - config.drawdown_throttle_start
         )
         mult = max(0.25, 1.0 - 0.75 * ramp)
-        return mult, f"Drawdown {drawdown_pct:.1%} — de-risk ramp; risk appetite capped at {mult:.0%}"
+        return (
+            mult,
+            f"Drawdown {drawdown_pct:.1%} — de-risk ramp; risk appetite capped at {mult:.0%}",
+        )
     return 0.0, f"Drawdown {drawdown_pct:.1%} — at hard cap; step-ups suspended"
 
 
@@ -386,9 +391,7 @@ def build_risk_review(
             if not seg:
                 continue
             r_vals = [e.realized_r for e in seg if e.realized_r is not None]
-            segments.append(
-                compute_edge_estimate(r_vals, silo=silo, epoch_id=epoch_id, config=cfg)
-            )
+            segments.append(compute_edge_estimate(r_vals, silo=silo, epoch_id=epoch_id, config=cfg))
 
     recommendations = [
         recommend_risk_appetite(

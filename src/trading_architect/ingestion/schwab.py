@@ -64,9 +64,7 @@ class SchwabAdapter(BrokerAdapter):
 
                 fees_raw = row.get("Fees & Comm", 0)
                 fees = (
-                    parse_money(fees_raw)
-                    if pd.notna(fees_raw) and str(fees_raw).strip()
-                    else 0.0
+                    parse_money(fees_raw) if pd.notna(fees_raw) and str(fees_raw).strip() else 0.0
                 )
                 fees = abs(fees)
 

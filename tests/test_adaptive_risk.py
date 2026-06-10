@@ -95,7 +95,9 @@ def test_drawdown_hard_cap_blocks_step_up():
     rec = recommend_risk_appetite(
         events,
         Silo.STOCK_OPTIONS,
-        config=AdaptiveRiskConfig(min_trades_for_step_up=10, step_up_optimal_f_lower_threshold=0.001),
+        config=AdaptiveRiskConfig(
+            min_trades_for_step_up=10, step_up_optimal_f_lower_threshold=0.001
+        ),
         drawdown_pct=0.21,
     )
     assert rec.action == RiskAction.DE_RISK

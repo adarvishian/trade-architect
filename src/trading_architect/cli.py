@@ -5,9 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from trading_architect.bootstrap import create_repository, import_and_assemble
-
 import trading_architect  # noqa: F401 — loads .env on import
+from trading_architect.bootstrap import create_repository, import_and_assemble
 
 
 def main() -> None:
@@ -158,7 +157,9 @@ def main() -> None:
     opt.add_argument("--chain", type=Path, help="Option chain CSV export")
     opt.add_argument("--source", choices=["csv", "schwab"], default="csv")
     opt.add_argument("--underlying", required=True, help="Underlying ticker")
-    opt.add_argument("--spot", type=float, help="Current spot price (optional with --source schwab)")
+    opt.add_argument(
+        "--spot", type=float, help="Current spot price (optional with --source schwab)"
+    )
     opt.add_argument("--target", type=float, required=True, help="Price target")
     opt.add_argument("--hold-days", type=int, required=True, help="Expected hold (days)")
     opt.add_argument(
@@ -277,7 +278,7 @@ def main() -> None:
 
         if args.login:
             if not schwab_py_available():
-                print("Install schwab-py first: pip install -e \".[schwab]\"")
+                print('Install schwab-py first: pip install -e ".[schwab]"')
                 return
             try:
                 get_client(interactive=True)
@@ -298,7 +299,7 @@ def main() -> None:
             f"Positions: {repo.position_count()}"
         )
     elif args.command == "marks":
-        from trading_architect.engines.marks import SchwabMarksProvider, default_marks_provider
+        from trading_architect.engines.marks import default_marks_provider
         from trading_architect.models.entities import PositionStatus, Silo
 
         repo = create_repository()
@@ -404,12 +405,18 @@ def main() -> None:
 
         cfg = AdaptiveRiskConfig()
         sizing = SizingConfig(
-            base_risk_f=args.base_f if args.base_f is not None else DEFAULT_SIZING_CONFIG.base_risk_f,
-            kelly_fraction=args.kelly if args.kelly is not None else DEFAULT_SIZING_CONFIG.kelly_fraction,
+            base_risk_f=args.base_f
+            if args.base_f is not None
+            else DEFAULT_SIZING_CONFIG.base_risk_f,
+            kelly_fraction=args.kelly
+            if args.kelly is not None
+            else DEFAULT_SIZING_CONFIG.kelly_fraction,
         )
 
         if args.silo == "all":
-            report = build_risk_review(events, config=cfg, sizing=sizing, drawdown_pct=args.drawdown)
+            report = build_risk_review(
+                events, config=cfg, sizing=sizing, drawdown_pct=args.drawdown
+            )
             print(format_risk_review(report))
         else:
             rec = recommend_risk_appetite(

@@ -86,7 +86,9 @@ def test_fetch_portfolio_snapshot_from_fixture(account_payload):
     snapshot = sa.fetch_portfolio_snapshot(["schwab-tos"], client=session, repo=repo)
     assert snapshot.total_portfolio_equity == pytest.approx(125000.5)
     assert len(snapshot.holdings) == 2
-    stock = next(h for h in snapshot.holdings if h.underlying == "AAPL" and h.asset_type == AssetType.STOCK)
+    stock = next(
+        h for h in snapshot.holdings if h.underlying == "AAPL" and h.asset_type == AssetType.STOCK
+    )
     assert stock.total_quantity == pytest.approx(10)
 
 

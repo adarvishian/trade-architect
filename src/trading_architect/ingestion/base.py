@@ -28,7 +28,9 @@ class BrokerAdapter(ABC):
     broker_name: str
 
     @abstractmethod
-    def parse_csv(self, path: Path, account: str | None = None) -> tuple[list[TradeEvent], list[ReviewQueueItem]]:
+    def parse_csv(
+        self, path: Path, account: str | None = None
+    ) -> tuple[list[TradeEvent], list[ReviewQueueItem]]:
         """Parse broker CSV into canonical TradeEvents and review-queue items."""
 
     def _review(

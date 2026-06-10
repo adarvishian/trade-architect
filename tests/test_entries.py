@@ -15,7 +15,9 @@ from trading_architect.models.entities import (
 )
 
 
-def _stock(side: Side, qty: float, price: float, ts: datetime, stop: float | None = None) -> TradeEvent:
+def _stock(
+    side: Side, qty: float, price: float, ts: datetime, stop: float | None = None
+) -> TradeEvent:
     return TradeEvent(
         broker="test",
         account="test",

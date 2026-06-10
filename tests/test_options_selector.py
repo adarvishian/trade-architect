@@ -3,8 +3,6 @@
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from trading_architect.config.options_selector import IvAssumption, OptionSelectorConfig
 from trading_architect.engines.options_selector import (
     OptionDirection,
@@ -54,7 +52,12 @@ def test_reprice_at_target_increases_otm_call_value():
     contract = next(c for c in snap.contracts if c.strike == 200)
     premium = contract.mid or 3.0
     projected, ret_pct, r_mult, _ = reprice_at_target(
-        contract, snap, target_price=220.0, expected_hold_days=60, premium=premium, config=OptionSelectorConfig()
+        contract,
+        snap,
+        target_price=220.0,
+        expected_hold_days=60,
+        premium=premium,
+        config=OptionSelectorConfig(),
     )
     assert projected > premium
     assert ret_pct > 0
@@ -129,7 +132,9 @@ def test_rank_empty_when_no_matching_right():
         asof_timestamp=datetime(2026, 5, 26),
         spot_price=100,
         contracts=[
-            ChainContract(strike=100, expiry=datetime(2026, 9, 1).date(), dte=100, mid=2.0, right="C")
+            ChainContract(
+                strike=100, expiry=datetime(2026, 9, 1).date(), dte=100, mid=2.0, right="C"
+            )
         ],
     )
     result = rank_contracts(

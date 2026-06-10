@@ -7,9 +7,8 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from typing import Any
 
-from trading_architect.config.adaptive_risk import AdaptiveRiskConfig, DEFAULT_ADAPTIVE_RISK_CONFIG
+from trading_architect.config.adaptive_risk import AdaptiveRiskConfig
 from trading_architect.config.options_selector import (
-    DEFAULT_OPTION_SELECTOR_CONFIG,
     IvAssumption,
     OptionSelectorConfig,
     ScoringWeights,
@@ -98,7 +97,11 @@ def option_selector_from_dict(data: dict[str, Any]) -> OptionSelectorConfig:
     iv_raw = data.get("iv_assumption", IvAssumption.CONSTANT.value)
     iv = IvAssumption(iv_raw) if isinstance(iv_raw, str) else iv_raw
     known = {f.name for f in fields(OptionSelectorConfig)}
-    filtered = {k: v for k, v in data.items() if k in known and k not in ("scoring_weights", "iv_assumption")}
+    filtered = {
+        k: v
+        for k, v in data.items()
+        if k in known and k not in ("scoring_weights", "iv_assumption")
+    }
     return OptionSelectorConfig(**filtered, iv_assumption=iv, scoring_weights=weights)
 
 
@@ -125,7 +128,9 @@ def app_settings_from_dict(data: dict[str, Any]) -> AppSettings:
     adaptive.current_base_f = sizing.base_risk_f
     adaptive.current_kelly_fraction = sizing.kelly_fraction
     raw_hashes = data.get("schwab_account_hashes") or {}
-    schwab_hashes = {str(k): str(v) for k, v in raw_hashes.items()} if isinstance(raw_hashes, dict) else {}
+    schwab_hashes = (
+        {str(k): str(v) for k, v in raw_hashes.items()} if isinstance(raw_hashes, dict) else {}
+    )
 
     live_equity = data.get("schwab_live_equity")
     schwab_live_equity = float(live_equity) if live_equity is not None else None
@@ -167,7 +172,11 @@ def diff_app_settings(
     now = datetime.now()
 
     scalar_fields = [
-        ("starting_equity_stock_options", old.starting_equity_stock_options, new.starting_equity_stock_options),
+        (
+            "starting_equity_stock_options",
+            old.starting_equity_stock_options,
+            new.starting_equity_stock_options,
+        ),
         ("starting_equity_futures", old.starting_equity_futures, new.starting_equity_futures),
     ]
     for name, old_val, new_val in scalar_fields:
@@ -188,7 +197,11 @@ def diff_app_settings(
         ("sizing.heat_cap", old.sizing.heat_cap, new.sizing.heat_cap),
         ("sizing.leverage_cap", old.sizing.leverage_cap, new.sizing.leverage_cap),
         ("sizing.drawdown_soft", old.sizing.drawdown_soft, new.sizing.drawdown_soft),
-        ("sizing.drawdown_throttle_start", old.sizing.drawdown_throttle_start, new.sizing.drawdown_throttle_start),
+        (
+            "sizing.drawdown_throttle_start",
+            old.sizing.drawdown_throttle_start,
+            new.sizing.drawdown_throttle_start,
+        ),
         ("sizing.drawdown_hard", old.sizing.drawdown_hard, new.sizing.drawdown_hard),
     ]
     for name, old_val, new_val in sizing_fields:

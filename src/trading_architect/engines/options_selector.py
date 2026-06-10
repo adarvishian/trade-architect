@@ -9,18 +9,27 @@ from trading_architect.config.options_selector import (
     DEFAULT_OPTION_SELECTOR_CONFIG,
     IvAssumption,
     OptionSelectorConfig,
-    ScoringWeights,
 )
 from trading_architect.config.sizing import DEFAULT_SIZING_CONFIG, SizingConfig
 from trading_architect.engines.formulas import delta_adjusted_notional
-from trading_architect.engines.options_pricing import black_scholes_price, bs_greeks, implied_vol_bisect
+from trading_architect.engines.options_pricing import (
+    black_scholes_price,
+    bs_greeks,
+    implied_vol_bisect,
+)
 from trading_architect.engines.sizing import (
     CandidateTrade,
     SiloExposure,
     SizeRecommendation,
     recommend_size,
 )
-from trading_architect.models.entities import AssetType, ChainContract, ChainSnapshot, Direction, Silo
+from trading_architect.models.entities import (
+    AssetType,
+    ChainContract,
+    ChainSnapshot,
+    Direction,
+    Silo,
+)
 
 
 class OptionDirection(str, Enum):
@@ -189,7 +198,6 @@ def enumerate_candidates(
         return []
 
     strikes = sorted({c.strike for c in pool})
-    spot = snapshot.spot_price
     target = inputs.target_price
 
     if inputs.direction == OptionDirection.LONG_CALL:
@@ -223,7 +231,10 @@ def enumerate_candidates(
             continue
         prev_mid = _contract_premium(prev) or 0
         cur_mid = _contract_premium(c) or 0
-        if cur_mid > 0 and (prev_mid <= 0 or abs(c.dte - inputs.expected_hold_days) < abs(prev.dte - inputs.expected_hold_days)):
+        if cur_mid > 0 and (
+            prev_mid <= 0
+            or abs(c.dte - inputs.expected_hold_days) < abs(prev.dte - inputs.expected_hold_days)
+        ):
             by_strike_expiry[key] = c
 
     return list(by_strike_expiry.values())
@@ -255,9 +266,12 @@ def _build_tradeoff_notes(
     inputs: OptionSelectorInput,
 ) -> list[str]:
     notes: list[str] = []
-    moneyness = "OTM" if (contract.right == "C" and contract.strike > spot) or (
-        contract.right == "P" and contract.strike < spot
-    ) else "ITM/ATM"
+    moneyness = (
+        "OTM"
+        if (contract.right == "C" and contract.strike > spot)
+        or (contract.right == "P" and contract.strike < spot)
+        else "ITM/ATM"
+    )
 
     if contract.strike < inputs.target_price and contract.right == "C":
         notes.append(
@@ -275,14 +289,22 @@ def _build_tradeoff_notes(
         )
 
     if contract.dte > inputs.expected_hold_days + 60:
-        notes.append(f"DTE {contract.dte} gives cushion past {inputs.expected_hold_days}d hold — lower theta pressure.")
+        notes.append(
+            f"DTE {contract.dte} gives cushion past {inputs.expected_hold_days}d hold — lower theta pressure."
+        )
     elif contract.dte < inputs.expected_hold_days + 30:
-        notes.append(f"DTE {contract.dte} is tight vs {inputs.expected_hold_days}d hold — elevated end-of-life gamma/theta risk.")
+        notes.append(
+            f"DTE {contract.dte} is tight vs {inputs.expected_hold_days}d hold — elevated end-of-life gamma/theta risk."
+        )
 
     if projected_return > 100:
-        notes.append(f"Projected return at target: {projected_return:.0f}% (deterministic what-if, not expected value).")
+        notes.append(
+            f"Projected return at target: {projected_return:.0f}% (deterministic what-if, not expected value)."
+        )
     elif projected_return < 0:
-        notes.append("At your target, model value is below premium paid — check IV assumption or target.")
+        notes.append(
+            "At your target, model value is below premium paid — check IV assumption or target."
+        )
 
     return notes
 
@@ -485,7 +507,9 @@ def format_option_selector_result(result: OptionSelectorResult) -> str:
         "",
     ]
     if not result.ranked:
-        lines.append("No contracts matched filters. Import a chain CSV with strikes/expiries in range.")
+        lines.append(
+            "No contracts matched filters. Import a chain CSV with strikes/expiries in range."
+        )
         return "\n".join(lines)
 
     for item in result.ranked:

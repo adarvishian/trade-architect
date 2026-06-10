@@ -106,11 +106,7 @@ def _fees_from_transfer_items(items: list[dict]) -> float:
 
 
 def _trade_items(items: list[dict]) -> list[dict]:
-    return [
-        item
-        for item in (items or [])
-        if item.get("instrument") and not item.get("feeType")
-    ]
+    return [item for item in (items or []) if item.get("instrument") and not item.get("feeType")]
 
 
 def _option_spec_from_synthetic(synthetic: str) -> tuple[str, str, OptionSpec]:
@@ -125,7 +121,9 @@ def _option_spec_from_synthetic(synthetic: str) -> tuple[str, str, OptionSpec]:
     return symbol, ticker, OptionSpec(right=right, strike=strike, expiry=expiry)
 
 
-def _normalize_instrument(item: dict) -> tuple[AssetType, str, str, OptionSpec | None, float, float]:
+def _normalize_instrument(
+    item: dict,
+) -> tuple[AssetType, str, str, OptionSpec | None, float, float]:
     instrument = item.get("instrument") or {}
     asset_type_raw = str(instrument.get("assetType") or instrument.get("type") or "").upper()
     symbol_raw = str(instrument.get("symbol", "")).strip()
@@ -149,7 +147,10 @@ def _normalize_instrument(item: dict) -> tuple[AssetType, str, str, OptionSpec |
             return asset_type, symbol, underlying, option_spec, qty, price
         raise ValueError(f"Unparseable option symbol: {symbol_raw}")
 
-    if asset_type_raw in {"EQUITY", "ETF", "COLLECTIVE_INVESTMENT", "INDEX", "MUTUAL_FUND"} or not asset_type_raw:
+    if (
+        asset_type_raw in {"EQUITY", "ETF", "COLLECTIVE_INVESTMENT", "INDEX", "MUTUAL_FUND"}
+        or not asset_type_raw
+    ):
         ticker = symbol_raw.split()[0].upper() if symbol_raw else underlying
         return AssetType.STOCK, ticker, ticker, None, qty, price
 
@@ -223,9 +224,7 @@ def parse_transactions_response(
 
     for idx, txn in enumerate(txns):
         try:
-            events.extend(
-                _transaction_to_events(txn, account=account, source=source, idx=idx)
-            )
+            events.extend(_transaction_to_events(txn, account=account, source=source, idx=idx))
         except Exception as exc:
             review.append(
                 ReviewQueueItem(

@@ -4,6 +4,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 data/trading_architect.db
+data/trading_architect.db-wal
+data/trading_architect.db-shm
+data/backups/
 data/.schwab_token.json
 data/raw/
 *.egg-info/

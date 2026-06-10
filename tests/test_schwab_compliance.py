@@ -40,6 +40,7 @@ def test_no_order_or_transfer_code(path: Path):
     for pattern in FORBIDDEN_PATTERNS:
         match = pattern.search(text)
         assert match is None, (
-            f"{path.relative_to(ROOT)}: forbidden pattern {pattern.pattern!r} "
-            f"at: {match.group()!r}" if match else ""
+            f"{path.relative_to(ROOT)}: forbidden pattern {pattern.pattern!r} at: {match.group()!r}"
+            if match
+            else ""
         )

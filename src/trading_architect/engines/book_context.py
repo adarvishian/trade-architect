@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from trading_architect.config.user_settings import AppSettings
 from trading_architect.engines.drawdown import (
-    DrawdownGovernorState,
     DrawdownMetrics,
     assess_drawdown_state,
     compute_drawdown_pct,

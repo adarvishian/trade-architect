@@ -92,7 +92,11 @@ def bs_greeks(
     if spot <= 0 or strike <= 0 or time_years <= 0 or vol <= 0:
         is_call = right.upper().startswith("C")
         if time_years <= 0:
-            delta = 1.0 if (is_call and spot > strike) else (-1.0 if (not is_call and spot < strike) else 0.0)
+            delta = (
+                1.0
+                if (is_call and spot > strike)
+                else (-1.0 if (not is_call and spot < strike) else 0.0)
+            )
             return {"delta": delta, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
         return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
 
@@ -108,14 +112,12 @@ def bs_greeks(
     if is_call:
         delta = norm.cdf(d1)
         theta = (
-            -spot * pdf_d1 * vol / (2 * sqrt_t)
-            - rate * strike * discount * norm.cdf(d2)
+            -spot * pdf_d1 * vol / (2 * sqrt_t) - rate * strike * discount * norm.cdf(d2)
         ) / 365.0
     else:
         delta = norm.cdf(d1) - 1.0
         theta = (
-            -spot * pdf_d1 * vol / (2 * sqrt_t)
-            + rate * strike * discount * norm.cdf(-d2)
+            -spot * pdf_d1 * vol / (2 * sqrt_t) + rate * strike * discount * norm.cdf(-d2)
         ) / 365.0
 
     return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega}

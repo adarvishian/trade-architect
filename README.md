@@ -9,7 +9,11 @@ Stock/options data can come from **CSV imports** or a live **Schwab Trader API**
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements.lock.txt
+pip install -e . --no-deps
+
+# Or editable install with extras (unpinned — prefer lockfile above)
+# pip install -e ".[dev,schwab]"
 
 # Copy credentials to .env (see .env.example) — loaded automatically
 cp .env.example .env
@@ -132,4 +136,41 @@ src/trading_architect/
 app/            Streamlit UI
 tests/          Unit tests + scrubbed Schwab fixtures (no live network in CI)
 data/           Local DB, archived raw CSVs, .schwab_token.json (git-ignored)
+```
+
+## Development
+
+Requires **Python 3.11+**. CI runs on 3.11.
+
+```bash
+pip install -e ".[dev,schwab]"   # or use requirements.lock.txt (see Quick start)
+
+ruff check .                     # lint
+ruff format --check .            # format check
+ruff format .                    # apply formatting
+pytest -q                        # 169 tests, no live network
+```
+
+Regenerate the lockfile after changing dependencies in `pyproject.toml`:
+
+```bash
+pip install pip-tools
+pip-compile pyproject.toml --extra=dev --extra=schwab -o requirements.lock.txt
+```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs ruff + pytest on every push/PR to `main`.
+
+## Database backup
+
+The SQLite store (`data/trading_architect.db`) is git-ignored and is the system of record. Back it up periodically:
+
+```bash
+python scripts/backup_db.py
+# → data/backups/trading_architect_YYYYMMDDTHHMMSSZ.db
+```
+
+Uses `sqlite3.Connection.backup()` with a WAL checkpoint for a consistent copy. Schedule via cron if desired, e.g. daily at 2am:
+
+```bash
+0 2 * * * cd /path/to/trading-architect && python scripts/backup_db.py
 ```

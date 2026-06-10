@@ -25,8 +25,8 @@ from trading_architect.engines.drawdown import (
 from trading_architect.engines.sizing import CandidateTrade, SiloExposure, recommend_size
 from trading_architect.models.entities import AssetType, Direction, Silo
 
-
 # ---- correlation providers ------------------------------------------------
+
 
 def test_conservative_provider_assumes_correlated():
     p = ConservativeCorrelationProvider(default_correlation=0.6)
@@ -35,13 +35,31 @@ def test_conservative_provider_assumes_correlated():
 
 
 def test_returns_provider_measures_correlation():
-    up = [0.01, 0.02, -0.01, 0.03, -0.02, 0.015, 0.005, -0.005, 0.02, 0.01,
-          0.01, -0.01, 0.02, 0.0, 0.03, -0.02, 0.01, 0.01, -0.01, 0.02]
+    up = [
+        0.01,
+        0.02,
+        -0.01,
+        0.03,
+        -0.02,
+        0.015,
+        0.005,
+        -0.005,
+        0.02,
+        0.01,
+        0.01,
+        -0.01,
+        0.02,
+        0.0,
+        0.03,
+        -0.02,
+        0.01,
+        0.01,
+        -0.01,
+        0.02,
+    ]
     same = list(up)
     opposite = [-x for x in up]
-    p = ReturnsCorrelationProvider(
-        {"A": up, "B": same, "C": opposite}, min_observations=20
-    )
+    p = ReturnsCorrelationProvider({"A": up, "B": same, "C": opposite}, min_observations=20)
     assert p.correlation("A", "B") == pytest.approx(1.0, abs=1e-6)
     assert p.correlation("A", "C") == pytest.approx(-1.0, abs=1e-6)
 
@@ -59,6 +77,7 @@ def test_returns_provider_falls_back_when_thin():
 
 
 # ---- clustering -----------------------------------------------------------
+
 
 def test_clustering_groups_correlated_separates_independent():
     # AAPL~MSFT correlated; GLD independent of both.
@@ -84,6 +103,7 @@ def test_max_correlation_to_empty_group_is_zero():
 
 # ---- attribution ----------------------------------------------------------
 
+
 def _two_cluster_provider():
     class P:
         def correlation(self, a, b):
@@ -93,6 +113,7 @@ def _two_cluster_provider():
             if a in tech and b in tech:
                 return 0.8
             return 0.05
+
     return P()
 
 
@@ -125,6 +146,7 @@ def test_no_attribution_is_conservative():
 
 
 # ---- attribution-aware throttle ------------------------------------------
+
 
 def test_throttle_below_soft_is_full_size():
     m = attribution_aware_throttle(0.05, 0.0)
@@ -160,6 +182,7 @@ def test_uncorrelated_candidate_relaxes_throttle():
 
 # ---- end-to-end sizing integration ---------------------------------------
 
+
 def _stock_candidate(underlying="AAPL"):
     return CandidateTrade(
         silo=Silo.STOCK_OPTIONS,
@@ -176,7 +199,9 @@ def test_sizing_uncorrelated_opportunity_not_taxed_in_drawdown():
     cfg = SizingConfig(base_risk_f=0.01, reference_atr=None)
     exposure = SiloExposure(silo_equity=100_000.0, drawdown_pct=0.17)
     correlated = recommend_size(_stock_candidate(), exposure, config=cfg, drawdown_correlation=1.0)
-    uncorrelated = recommend_size(_stock_candidate(), exposure, config=cfg, drawdown_correlation=0.0)
+    uncorrelated = recommend_size(
+        _stock_candidate(), exposure, config=cfg, drawdown_correlation=0.0
+    )
     # Correlated entry is throttled; uncorrelated entry is sized at full edge.
     assert correlated.recommended_qty < uncorrelated.recommended_qty
     assert uncorrelated.recommended_qty == pytest.approx(200.0)

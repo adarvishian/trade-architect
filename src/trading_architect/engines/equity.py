@@ -55,7 +55,9 @@ def _marks_with_provider(
     return marks
 
 
-def _leg_asset_type(symbol: str, position: Position, events_by_symbol: dict[str, TradeEvent]) -> AssetType:
+def _leg_asset_type(
+    symbol: str, position: Position, events_by_symbol: dict[str, TradeEvent]
+) -> AssetType:
     event = events_by_symbol.get(symbol)
     if event:
         return event.asset_type

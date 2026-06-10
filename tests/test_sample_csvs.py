@@ -35,7 +35,9 @@ def test_robinhood_sample_parses_hundreds_of_events():
 
 def test_schwab_sample_parses_options_and_stocks():
     adapter = SchwabAdapter()
-    events, review = adapter.parse_csv(SAMPLES / "Charles Schwab Transactions May 26 2026 Sample.csv")
+    events, review = adapter.parse_csv(
+        SAMPLES / "Charles Schwab Transactions May 26 2026 Sample.csv"
+    )
     assert len(events) > 150
     assert len(review) < 30
     symbols = {e.underlying for e in events}
@@ -86,7 +88,6 @@ def test_tradovate_performance_import_is_idempotent(temp_db):
 
 def test_tradovate_reimport_dedupes_legacy_rows_without_fill_id(temp_db):
     """Legacy rows (pre fill-id parser) should not double P/L on reimport."""
-    from datetime import datetime
 
     from trading_architect.bootstrap import create_repository
     from trading_architect.models.entities import TradeEvent

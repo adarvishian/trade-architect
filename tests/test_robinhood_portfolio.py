@@ -18,8 +18,13 @@ from trading_architect.models.entities import (
 
 
 def test_account_label_for_roth_and_individual():
-    assert rf._account_label_for_acct({"type": "ira_roth", "account_number": "1"}) == "robinhood-roth"
-    assert rf._account_label_for_acct({"type": "margin", "account_number": "2"}) == "robinhood-individual"
+    assert (
+        rf._account_label_for_acct({"type": "ira_roth", "account_number": "1"}) == "robinhood-roth"
+    )
+    assert (
+        rf._account_label_for_acct({"type": "margin", "account_number": "2"})
+        == "robinhood-individual"
+    )
 
 
 def test_cash_and_equivalents_from_profile():
@@ -68,9 +73,7 @@ def test_consolidate_holdings_sum_of_parts():
 
 
 def test_format_account_breakdown():
-    text = rf.format_account_breakdown(
-        {"robinhood-roth": 50, "robinhood-individual": 100.5}
-    )
+    text = rf.format_account_breakdown({"robinhood-roth": 50, "robinhood-individual": 100.5})
     assert "roth: 50" in text
     assert "individual: 100.5" in text
 

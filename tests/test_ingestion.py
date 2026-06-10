@@ -8,7 +8,6 @@ from trading_architect.bootstrap import create_repository, import_and_assemble
 from trading_architect.ingestion.base import resolve_epoch_id
 from trading_architect.ingestion.robinhood import RobinhoodAdapter
 
-
 FIXTURES = Path(__file__).parent / "fixtures"
 
 

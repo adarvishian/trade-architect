@@ -18,7 +18,6 @@ from trading_architect.models.entities import (
     TradeEvent,
 )
 
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS methodology_epochs (
     epoch_id TEXT PRIMARY KEY,
@@ -234,9 +233,7 @@ def row_to_epoch(row: sqlite3.Row) -> MethodologyEpoch:
     return MethodologyEpoch(
         epoch_id=row["epoch_id"],
         start_date=datetime.fromisoformat(row["start_date"]).date(),
-        end_date=(
-            datetime.fromisoformat(row["end_date"]).date() if row["end_date"] else None
-        ),
+        end_date=(datetime.fromisoformat(row["end_date"]).date() if row["end_date"] else None),
         label=row["label"],
         notes=row["notes"] or "",
     )

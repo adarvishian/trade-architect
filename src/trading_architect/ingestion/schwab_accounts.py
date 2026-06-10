@@ -8,9 +8,9 @@ from typing import Any
 import httpx
 
 from trading_architect.config.user_settings import AppSettings
+from trading_architect.ingestion.parsing import parse_option_from_text
 from trading_architect.ingestion.robinhood_fetch import consolidate_holdings
 from trading_architect.ingestion.schwab_auth import SchwabSession, get_client
-from trading_architect.ingestion.parsing import parse_option_from_text
 from trading_architect.ingestion.schwab_market_data import occ_to_synthetic, parse_synthetic_option
 from trading_architect.models.entities import (
     AssetType,
@@ -212,7 +212,11 @@ def refresh_schwab_account_mappings(
             continue
         while label_idx < len(default_labels) and default_labels[label_idx] in hashes:
             label_idx += 1
-        label = default_labels[label_idx] if label_idx < len(default_labels) else f"schwab-{len(hashes) + 1}"
+        label = (
+            default_labels[label_idx]
+            if label_idx < len(default_labels)
+            else f"schwab-{len(hashes) + 1}"
+        )
         hashes[label] = hash_val
         known_hashes.add(hash_val)
         label_idx += 1
@@ -275,8 +279,7 @@ def _account_hash_for_label(
         return str(accounts[0]["hashValue"])
 
     available = [
-        redact_account_display("account", str(a.get("accountNumber", "?")))
-        for a in accounts
+        redact_account_display("account", str(a.get("accountNumber", "?"))) for a in accounts
     ]
     raise ValueError(
         f"No Schwab account matched '{label}'. Available: {', '.join(available) or 'none'}"

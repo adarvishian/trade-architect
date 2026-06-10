@@ -4,9 +4,18 @@ from datetime import datetime
 
 import pytest
 
-from trading_architect.config.user_settings import AppSettings, app_settings_from_json, app_settings_to_json, diff_app_settings
+from trading_architect.config.user_settings import (
+    AppSettings,
+    app_settings_from_json,
+    app_settings_to_json,
+    diff_app_settings,
+)
 from trading_architect.engines.book_context import build_book_context
-from trading_architect.engines.drawdown import DrawdownGovernorState, assess_drawdown_state, compute_drawdown_pct
+from trading_architect.engines.drawdown import (
+    DrawdownGovernorState,
+    assess_drawdown_state,
+    compute_drawdown_pct,
+)
 from trading_architect.engines.equity import equity_metrics_for_silo
 from trading_architect.models.entities import (
     AssetType,
@@ -118,7 +127,9 @@ def test_open_mtm_moves_equity_before_close():
 
 
 def test_build_book_context_effective_drawdown():
-    settings = AppSettings(starting_equity_stock_options=100_000.0, starting_equity_futures=50_000.0)
+    settings = AppSettings(
+        starting_equity_stock_options=100_000.0, starting_equity_futures=50_000.0
+    )
     positions = [
         Position(
             position_id="p1",

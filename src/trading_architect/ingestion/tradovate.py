@@ -108,8 +108,7 @@ class TradovateAdapter(BrokerAdapter):
 
         if not all([date_col, symbol_col, qty_col, price_col]):
             raise ValueError(
-                f"Unrecognized Tradovate CSV format in {source}. "
-                f"Columns found: {list(df.columns)}"
+                f"Unrecognized Tradovate CSV format in {source}. Columns found: {list(df.columns)}"
             )
 
         for idx, row in df.iterrows():
@@ -147,9 +146,7 @@ class TradovateAdapter(BrokerAdapter):
                         silo=Silo.FUTURES,
                         fill_id=fill_id,
                         raw_ref=(
-                            f"{source}::fill_{fill_id}"
-                            if fill_id
-                            else f"{source}::row_{idx}"
+                            f"{source}::fill_{fill_id}" if fill_id else f"{source}::row_{idx}"
                         ),
                     )
                 )

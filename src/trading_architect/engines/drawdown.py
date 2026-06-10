@@ -83,8 +83,7 @@ def assess_drawdown_state(
             state=DrawdownGovernorState.THROTTLE,
             throttle_multiplier=mult,
             message=(
-                f"Drawdown {drawdown_pct:.1%} — de-risk ramp active "
-                f"({mult:.0%} of normal size)"
+                f"Drawdown {drawdown_pct:.1%} — de-risk ramp active ({mult:.0%} of normal size)"
             ),
         )
 

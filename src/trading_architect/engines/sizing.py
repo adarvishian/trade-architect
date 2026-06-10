@@ -17,7 +17,10 @@ from trading_architect.engines.formulas import (
     leverage_ratio,
     portfolio_heat,
 )
-from trading_architect.engines.r_distribution import bootstrap_optimal_f_lower, compute_r_distribution
+from trading_architect.engines.r_distribution import (
+    bootstrap_optimal_f_lower,
+    compute_r_distribution,
+)
 from trading_architect.models.entities import AssetType, Direction, Position, Silo, TradeEvent
 
 
@@ -84,7 +87,9 @@ class SizeRecommendation:
     warnings: list[str] = field(default_factory=list)
 
 
-def _effective_f_for_equity(equity: float, base_f: float, tiers: list[EquityTier]) -> tuple[float, str]:
+def _effective_f_for_equity(
+    equity: float, base_f: float, tiers: list[EquityTier]
+) -> tuple[float, str]:
     """Layer 5 — band base f by equity tier."""
     applicable = [t for t in sorted(tiers, key=lambda t: t.min_equity) if equity >= t.min_equity]
     if not applicable:
@@ -131,8 +136,11 @@ def _optimal_f_for_silo(
     entries = extract_closed_entries(events)
     post_epoch = DEFAULT_EPOCHS[-1].epoch_id if DEFAULT_EPOCHS else None
     seg = [
-        e for e in entries
-        if e.silo == silo and e.realized_r is not None and (post_epoch is None or e.epoch_id == post_epoch)
+        e
+        for e in entries
+        if e.silo == silo
+        and e.realized_r is not None
+        and (post_epoch is None or e.epoch_id == post_epoch)
     ]
     if len(seg) < 3:
         seg = [e for e in entries if e.silo == silo and e.realized_r is not None]
@@ -219,7 +227,9 @@ def recommend_size(
     if throttle_msg:
         warnings.append(throttle_msg)
 
-    tier_f, tier_label = _effective_f_for_equity(exposure.silo_equity, cfg.base_risk_f, cfg.equity_tiers)
+    tier_f, tier_label = _effective_f_for_equity(
+        exposure.silo_equity, cfg.base_risk_f, cfg.equity_tiers
+    )
     effective_f = tier_f * throttle_mult
 
     # Layer 2 — fractional risk
@@ -267,7 +277,11 @@ def recommend_size(
     kelly_f_used = None
     qty_l4 = qty_l3
     if optimal_f is not None:
-        base_kelly_f = optimal_f_lower if (cfg.use_kelly_lower_ci and optimal_f_lower is not None) else optimal_f
+        base_kelly_f = (
+            optimal_f_lower
+            if (cfg.use_kelly_lower_ci and optimal_f_lower is not None)
+            else optimal_f
+        )
         kelly_f_used = base_kelly_f * cfg.kelly_fraction * throttle_mult
         qty_l4 = fractional_risk_size(exposure.silo_equity, kelly_f_used, rpu)
         ci_note = "lower-CI optimal-f" if optimal_f_lower is not None else "point optimal-f"
@@ -372,12 +386,18 @@ def recommend_size(
         )
     elif qty_l4 < qty_l2 and abs(qty_final - qty_l4) < 1e-6:
         binding = BindingConstraint.KELLY
-        rationale_parts.append("**Binding constraint: fractional Kelly** (below fractional-risk baseline).")
+        rationale_parts.append(
+            "**Binding constraint: fractional Kelly** (below fractional-risk baseline)."
+        )
     elif candidate.atr and qty_l3 < qty_l2 and abs(qty_final - qty_l3) < 1e-6:
         binding = BindingConstraint.VOLATILITY
-        rationale_parts.append("**Binding constraint: volatility normalization** (wider stop / higher ATR).")
+        rationale_parts.append(
+            "**Binding constraint: volatility normalization** (wider stop / higher ATR)."
+        )
     else:
-        rationale_parts.append("**Binding constraint: fractional risk** (Kelly and ceilings not tighter).")
+        rationale_parts.append(
+            "**Binding constraint: fractional risk** (Kelly and ceilings not tighter)."
+        )
 
     if throttle_mult < 1.0:
         binding = BindingConstraint.DRAWDOWN_THROTTLE

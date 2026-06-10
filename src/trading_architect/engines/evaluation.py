@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
 from enum import Enum
 
 from trading_architect.assembly.entries import ClosedTradeEntry, extract_closed_entries
@@ -80,7 +79,9 @@ class EvaluationReport:
     starting_equity_by_silo: dict[str, float]
     rules_evaluated: list[str]
 
-    def total_alpha(self, silo: Silo | None = None, rule: CounterfactualRule | None = None) -> float:
+    def total_alpha(
+        self, silo: Silo | None = None, rule: CounterfactualRule | None = None
+    ) -> float:
         total = 0.0
         for seg in self.segments:
             if silo and seg.silo != silo:
@@ -132,7 +133,9 @@ def _prior_epoch_optimal_f(
         return None, "first_epoch_no_prior"
     prior_epoch = epoch_ids[idx - 1]
     prior_entries = [
-        e for e in entries if e.silo == silo and e.epoch_id == prior_epoch and e.realized_r is not None
+        e
+        for e in entries
+        if e.silo == silo and e.epoch_id == prior_epoch and e.realized_r is not None
     ]
     prior_r = [e.realized_r for e in prior_entries if e.realized_r is not None]
     prior_dist = compute_r_distribution(prior_r)
@@ -154,7 +157,9 @@ def _counterfactual_qty(
         return entry.quantity
 
     budget = _target_risk_budget(rule, equity_at_entry, optimal_f)
-    target_qty = fractional_risk_size(equity_at_entry, budget / equity_at_entry, entry.risk_per_unit)
+    target_qty = fractional_risk_size(
+        equity_at_entry, budget / equity_at_entry, entry.risk_per_unit
+    )
 
     # Leverage cap proxy: notional cannot exceed leverage_cap × equity (stock/options)
     if entry.silo == Silo.STOCK_OPTIONS and entry.asset_type.value != "option":
@@ -246,9 +251,7 @@ def evaluate_alpha_left(
 
     for silo in (Silo.STOCK_OPTIONS, Silo.FUTURES):
         for epoch_id in epoch_ids:
-            seg_entries = [
-                e for e in entries if e.silo == silo and e.epoch_id == epoch_id
-            ]
+            seg_entries = [e for e in entries if e.silo == silo and e.epoch_id == epoch_id]
             if not seg_entries:
                 continue
 
@@ -274,7 +277,11 @@ def evaluate_alpha_left(
                     )
                     continue
 
-                rule_kelly_f = kelly_f if _is_kelly_rule(rule) else (r_dist.optimal_f if r_dist else DEFAULT_KELLY_FRACTION)
+                rule_kelly_f = (
+                    kelly_f
+                    if _is_kelly_rule(rule)
+                    else (r_dist.optimal_f if r_dist else DEFAULT_KELLY_FRACTION)
+                )
                 rule_kelly_source = kelly_source if _is_kelly_rule(rule) else None
 
                 contributions: list[TradeContribution] = []
@@ -358,12 +365,16 @@ def format_report_summary(report: EvaluationReport) -> str:
             if seg.r_distribution:
                 rd = seg.r_distribution
                 lines.append(f"--- {seg.silo.value} / {seg.epoch_id} — R-distribution ---")
-                lines.append(f"  Trades: {rd.count} | Expectancy: {rd.expectancy:.2f}R | Win rate: {rd.win_rate:.0%}")
+                lines.append(
+                    f"  Trades: {rd.count} | Expectancy: {rd.expectancy:.2f}R | Win rate: {rd.win_rate:.0%}"
+                )
                 lines.append(
                     f"  Mean: {rd.mean_r:.2f}R | Std: {rd.std_r:.2f} | Skew: {rd.skew:.2f} | "
                     f"P5/P95: {rd.p05_r:.2f}/{rd.p95_r:.2f}R"
                 )
-                lines.append(f"  Optimal-f: {rd.optimal_f:.3f} | ¼-Kelly f: {rd.kelly_quarter_f:.3f}")
+                lines.append(
+                    f"  Optimal-f: {rd.optimal_f:.3f} | ¼-Kelly f: {rd.kelly_quarter_f:.3f}"
+                )
                 lines.append("")
 
     lines.append("--- Counterfactual alpha (USD) ---")

@@ -54,8 +54,7 @@ def _require_schwab_py() -> None:
         import schwab  # noqa: F401
     except ImportError as exc:
         raise ImportError(
-            "schwab-py is required for Schwab API access. "
-            'Install with: pip install -e ".[schwab]"'
+            'schwab-py is required for Schwab API access. Install with: pip install -e ".[schwab]"'
         ) from exc
 
 

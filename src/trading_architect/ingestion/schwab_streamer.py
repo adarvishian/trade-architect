@@ -46,8 +46,7 @@ def _require_websockets() -> None:
         import websockets  # noqa: F401
     except ImportError as exc:
         raise ImportError(
-            "websockets is required for Schwab Streamer. "
-            'Install with: pip install -e ".[schwab]"'
+            'websockets is required for Schwab Streamer. Install with: pip install -e ".[schwab]"'
         ) from exc
 
 
@@ -117,7 +116,9 @@ class StreamerQuote:
         return self.bid if self.bid is not None else self.ask
 
 
-def merge_quote_update(existing: StreamerQuote | None, row: dict[str, Any], *, is_option: bool) -> StreamerQuote:
+def merge_quote_update(
+    existing: StreamerQuote | None, row: dict[str, Any], *, is_option: bool
+) -> StreamerQuote:
     """Merge a partial Streamer data row into the latest-value cache."""
     occ_key = str(row.get("key", ""))
     internal = from_occ(occ_key) or occ_key.upper()
@@ -153,7 +154,9 @@ def merge_quote_update(existing: StreamerQuote | None, row: dict[str, Any], *, i
             strike=_float_field(row, 20) if 20 in row or "20" in row else base.strike,
             right=str(row["21"]).upper() if "21" in row else base.right,
             dte=int(row["27"]) if "27" in row and row["27"] is not None else base.dte,
-            underlying_price=_float_field(row, 35) if 35 in row or "35" in row else base.underlying_price,
+            underlying_price=_float_field(row, 35)
+            if 35 in row or "35" in row
+            else base.underlying_price,
             delayed=delayed,
             asof=asof,
             is_option=True,

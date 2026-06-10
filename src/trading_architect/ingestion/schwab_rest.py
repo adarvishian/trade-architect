@@ -173,9 +173,7 @@ def _raise_for_response(resp: Any, context: str) -> dict:
         except Exception:
             pass
         if status == 401:
-            raise PermissionError(
-                f"Schwab auth failed ({context}). Re-authenticate with --login."
-            )
+            raise PermissionError(f"Schwab auth failed ({context}). Re-authenticate with --login.")
         if status == 429:
             raise RuntimeError(f"Schwab rate limit hit ({context}). Retry shortly.")
         raise RuntimeError(f"Schwab API error {status} ({context}): {body}")
