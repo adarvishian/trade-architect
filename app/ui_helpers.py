@@ -4,16 +4,59 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import traceback
+from pathlib import Path
 
 import streamlit as st
 
+from trading_architect import __version__
 from trading_architect.config.defaults import DATA_DIR
 from trading_architect.engines.book_context import BookContext, SiloBookState
 from trading_architect.engines.drawdown import DrawdownGovernorState
 
 UI_LOG_PATH = DATA_DIR / "trading_architect_ui.log"
 logger = logging.getLogger("trading_architect.ui")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@st.cache_data(ttl=60)
+def get_git_branch() -> str:
+    """Current git branch, or 'unknown' when not in a repo."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            cwd=_REPO_ROOT,
+            check=False,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+            if branch:
+                return branch
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "unknown"
+
+
+def render_app_header() -> None:
+    """Page title with branch and package version in the top-right."""
+    col_title, col_meta = st.columns([5, 1])
+    with col_title:
+        st.title("Trading Architect")
+        st.caption(
+            "Risk-adjusted position sizing & trade evaluation — import CSVs, size trades, review edge."
+        )
+    with col_meta:
+        branch = get_git_branch()
+        st.markdown(
+            f'<p style="text-align: right; margin: 0; font-size: 0.8rem; color: #888;">'
+            f"<code>{branch}</code><br>v{__version__}"
+            f"</p>",
+            unsafe_allow_html=True,
+        )
 
 
 def format_ui_error(exc: Exception, *, context: str) -> str:

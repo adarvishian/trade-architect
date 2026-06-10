@@ -12,7 +12,7 @@ dependencies = [
     "pandas>=2.2",
     "numpy>=1.26",
     "scipy>=1.12",
-    "streamlit>=1.32",
+    "streamlit>=1.53",
     "pydantic>=2.6",
     "python-dotenv>=1.0",
 ]
@@ -32,6 +32,12 @@ ignore = ["E501"]
 
 [project.scripts]
 ta = "trading_architect.cli:main"
+
+[tool.vercel]
+entrypoint = "asgi:app"
+
+[tool.vercel.scripts]
+build = "pip install -e . --no-deps"
 
 [tool.setuptools.packages.find]
 where = ["src"]

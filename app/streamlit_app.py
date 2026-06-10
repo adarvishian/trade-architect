@@ -9,7 +9,13 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from ui_helpers import cap_status_pct, render_governor_sidebar, show_ui_error, silo_book_row
+from ui_helpers import (
+    cap_status_pct,
+    render_app_header,
+    render_governor_sidebar,
+    show_ui_error,
+    silo_book_row,
+)
 
 import trading_architect  # noqa: F401 — loads .env on import
 from trading_architect.bootstrap import (
@@ -91,10 +97,7 @@ st.sidebar.title("Trading Architect")
 page = st.sidebar.radio("Navigate", PAGES, index=0)
 render_governor_sidebar(book)
 
-st.title("Trading Architect")
-st.caption(
-    "Risk-adjusted position sizing & trade evaluation — import CSVs, size trades, review edge."
-)
+render_app_header()
 
 if page == "Dashboard":
     st.header("Dashboard")
