@@ -1,0 +1,11 @@
+{
+  "streamerInfo": [
+    {
+      "streamerSocketUrl": "wss://streamer.example.test/ws",
+      "schwabClientCustomerId": "Customer1",
+      "schwabClientCorrelId": "correl-abc-123",
+      "schwabClientChannel": "N9",
+      "schwabClientFunctionId": "APIAPP"
+    }
+  ]
+}

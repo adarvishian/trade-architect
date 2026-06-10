@@ -1,0 +1,67 @@
+{
+  "symbol": "NVDA",
+  "underlyingPrice": 950.0,
+  "underlying": {
+    "last": 950.25,
+    "mark": 950.0
+  },
+  "callExpDateMap": {
+    "2026-09-18:120": {
+      "950.0": [
+        {
+          "putCall": "CALL",
+          "strikePrice": 950.0,
+          "expirationDate": "2026-09-18",
+          "daysToExpiration": 120,
+          "bid": 45.0,
+          "ask": 46.0,
+          "mark": 45.5,
+          "volatility": 32.5,
+          "delta": 0.52,
+          "gamma": 0.004,
+          "theta": -0.35,
+          "vega": 1.2,
+          "openInterest": 1500
+        }
+      ],
+      "1000.0": [
+        {
+          "putCall": "CALL",
+          "strikePrice": 1000.0,
+          "expirationDate": "2026-09-18",
+          "daysToExpiration": 120,
+          "bid": 28.0,
+          "ask": 29.0,
+          "mark": 28.5,
+          "volatility": 31.0,
+          "delta": 0.38,
+          "gamma": 0.003,
+          "theta": -0.30,
+          "vega": 1.1,
+          "openInterest": 800
+        }
+      ]
+    }
+  },
+  "putExpDateMap": {
+    "2026-09-18:120": {
+      "900.0": [
+        {
+          "putCall": "PUT",
+          "strikePrice": 900.0,
+          "expirationDate": "2026-09-18",
+          "daysToExpiration": 120,
+          "bid": 22.0,
+          "ask": 23.0,
+          "mark": 22.5,
+          "volatility": 33.0,
+          "delta": -0.35,
+          "gamma": 0.003,
+          "theta": -0.28,
+          "vega": 1.0,
+          "openInterest": 600
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/trading_architect.db
+data/.schwab_token.json
+data/raw/
+*.egg-info/
+dist/
+build/

@@ -1,0 +1,21 @@
+{
+  "data": [
+    {
+      "service": "LEVELONE_EQUITIES",
+      "timestamp": 1714949592301,
+      "command": "SUBS",
+      "content": [
+        {
+          "key": "AAPL",
+          "delayed": false,
+          "assetMainType": "EQUITY",
+          "1": 183.75,
+          "2": 183.8,
+          "3": 183.78,
+          "33": 183.77,
+          "35": 1668715930570
+        }
+      ]
+    }
+  ]
+}

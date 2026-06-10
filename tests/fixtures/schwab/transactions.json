@@ -1,0 +1,59 @@
+[
+  {
+    "activityId": 900001,
+    "type": "TRADE",
+    "time": "2026-05-18T14:30:00+0000",
+    "transferItems": [
+      {
+        "instrument": {
+          "symbol": "AAPL",
+          "assetType": "EQUITY",
+          "underlyingSymbol": "AAPL"
+        },
+        "amount": 10,
+        "price": 195.50,
+        "cost": 1955.0
+      },
+      {
+        "feeType": "COMMISSION",
+        "cost": -0.65
+      }
+    ]
+  },
+  {
+    "activityId": 900002,
+    "type": "TRADE",
+    "time": "2026-05-19T15:00:00+0000",
+    "transferItems": [
+      {
+        "instrument": {
+          "symbol": "AAPL  260918C00110000",
+          "assetType": "OPTION",
+          "underlyingSymbol": "AAPL"
+        },
+        "amount": 2,
+        "price": 8.50,
+        "cost": 1700.0
+      },
+      {
+        "feeType": "COMMISSION",
+        "cost": -1.30
+      }
+    ]
+  },
+  {
+    "activityId": 900003,
+    "type": "TRADE",
+    "time": "2026-05-20T16:00:00+0000",
+    "transferItems": [
+      {
+        "instrument": {
+          "symbol": "BROKEN",
+          "assetType": "UNKNOWN_TYPE"
+        },
+        "amount": 1,
+        "price": 1.0
+      }
+    ]
+  }
+]

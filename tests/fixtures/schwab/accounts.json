@@ -1,0 +1,56 @@
+{
+  "securitiesAccount": {
+    "accountNumber": "00001234",
+    "type": "MARGIN",
+    "positions": [
+      {
+        "shortQuantity": 0,
+        "averagePrice": 195.5,
+        "longQuantity": 10,
+        "instrument": {
+          "symbol": "AAPL",
+          "assetType": "EQUITY",
+          "underlyingSymbol": "AAPL"
+        },
+        "marketValue": 2000.0
+      },
+      {
+        "shortQuantity": 0,
+        "averagePrice": 8.5,
+        "longQuantity": 2,
+        "instrument": {
+          "symbol": "AAPL  260918C00110000",
+          "assetType": "OPTION",
+          "underlyingSymbol": "AAPL"
+        },
+        "marketValue": 1800.0,
+        "description": "AAPL 09/18/2026 110.0 C"
+      },
+      {
+        "shortQuantity": 0,
+        "averagePrice": 4500.0,
+        "longQuantity": 1,
+        "instrument": {
+          "symbol": "/ES",
+          "assetType": "FUTURE",
+          "underlyingSymbol": "ES"
+        },
+        "marketValue": 450000.0
+      }
+    ],
+    "initialBalances": {
+      "cashBalance": 12000.0,
+      "moneyMarketFund": 3000.0,
+      "totalCash": 15000.0,
+      "buyingPower": 85000.0,
+      "liquidationValue": 125000.5,
+      "equity": 125000.5
+    },
+    "currentBalances": {
+      "cashBalance": 12000.0,
+      "buyingPower": 85000.0,
+      "liquidationValue": 125000.5,
+      "equity": 125000.5
+    }
+  }
+}
