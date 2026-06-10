@@ -50,6 +50,9 @@ DRAWDOWN_HARD_CAP = 0.20
 DEFAULT_CORRELATION_THRESHOLD = 0.5  # pair at/above this is treated as one effective opportunity
 DEFAULT_ASSUMED_CORRELATION = 0.6  # assumed corr between distinct names when no return data
 
+# Marks / greeks estimation when live IV is unavailable
+DEFAULT_IV_FALLBACK = 0.2
+
 # Futures point values (extend as needed)
 FUTURES_POINT_VALUES: dict[str, float] = {
     "ES": 50.0,

@@ -174,6 +174,278 @@ def aggregate_open_exposure(
     )
 
 
+@dataclass
+class _LayerQuantities:
+    layers: list[LayerResult]
+    qty_l2: float
+    qty_l3: float
+    qty_l4: float
+    qty_pre_cap: float
+    kelly_f_used: float | None
+    tier_label: str
+    warnings: list[str]
+
+
+@dataclass
+class _CapResult:
+    qty_final: float
+    max_qty_heat: float
+    max_qty_lev: float
+    dollar_risk: float
+    delta_notional: float
+    heat_after: float
+    lev_after: float
+
+
+def _compute_sizing_layers(
+    candidate: CandidateTrade,
+    exposure: SiloExposure,
+    cfg: SizingConfig,
+    *,
+    effective_f: float,
+    tier_f: float,
+    tier_label: str,
+    throttle_mult: float,
+    rpu: float,
+    events: list[TradeEvent] | None,
+    optimal_f_override: float | None,
+) -> _LayerQuantities:
+    layers: list[LayerResult] = []
+    warnings: list[str] = []
+
+    qty_l2 = fractional_risk_size(exposure.silo_equity, effective_f, rpu)
+    layers.append(
+        LayerResult(
+            layer=2,
+            name="Fractional risk",
+            recommended_qty=qty_l2,
+            effective_f=effective_f,
+            detail=f"{effective_f:.2%} × ${exposure.silo_equity:,.0f} equity / ${rpu:,.2f} risk per unit ({tier_label})",
+        )
+    )
+
+    qty_l3 = qty_l2
+    if candidate.atr and candidate.atr > 0 and cfg.reference_atr and cfg.reference_atr > 0:
+        vol_factor = cfg.reference_atr / candidate.atr
+        qty_l3 = qty_l2 * vol_factor
+        layers.append(
+            LayerResult(
+                layer=3,
+                name="Volatility normalization",
+                recommended_qty=qty_l3,
+                detail=f"ATR scale {vol_factor:.2f}× (ref {cfg.reference_atr:.2f} / instrument {candidate.atr:.2f})",
+            )
+        )
+    else:
+        layers.append(
+            LayerResult(
+                layer=3,
+                name="Volatility normalization",
+                recommended_qty=qty_l3,
+                detail="Skipped — no ATR or reference ATR configured",
+            )
+        )
+
+    optimal_f, optimal_f_lower = None, None
+    if optimal_f_override is not None:
+        optimal_f = optimal_f_override
+    elif events:
+        optimal_f, optimal_f_lower = _optimal_f_for_silo(events, candidate.silo, cfg)
+
+    kelly_f_used = None
+    qty_l4 = qty_l3
+    if optimal_f is not None:
+        base_kelly_f = (
+            optimal_f_lower
+            if (cfg.use_kelly_lower_ci and optimal_f_lower is not None)
+            else optimal_f
+        )
+        kelly_f_used = base_kelly_f * cfg.kelly_fraction * throttle_mult
+        qty_l4 = fractional_risk_size(exposure.silo_equity, kelly_f_used, rpu)
+        ci_note = "lower-CI optimal-f" if optimal_f_lower is not None else "point optimal-f"
+        layers.append(
+            LayerResult(
+                layer=4,
+                name="Fractional Kelly",
+                recommended_qty=qty_l4,
+                effective_f=kelly_f_used,
+                detail=f"{cfg.kelly_fraction:.0%} Kelly on {ci_note} ({base_kelly_f:.3f} → {kelly_f_used:.3%} of equity)",
+            )
+        )
+    else:
+        layers.append(
+            LayerResult(
+                layer=4,
+                name="Fractional Kelly",
+                recommended_qty=qty_l4,
+                detail="Skipped — insufficient closed-trade history for optimal-f",
+            )
+        )
+        warnings.append("Kelly layer inactive until more closed trades exist in this silo.")
+
+    layers.append(
+        LayerResult(
+            layer=5,
+            name="Equity scaling",
+            recommended_qty=qty_l3,
+            effective_f=tier_f,
+            detail=f"Tier '{tier_label}' → base f {cfg.base_risk_f:.2%} × {tier_f / cfg.base_risk_f:.1f}",
+        )
+    )
+
+    return _LayerQuantities(
+        layers=layers,
+        qty_l2=qty_l2,
+        qty_l3=qty_l3,
+        qty_l4=qty_l4,
+        qty_pre_cap=min(qty_l2, qty_l3, qty_l4),
+        kelly_f_used=kelly_f_used,
+        tier_label=tier_label,
+        warnings=warnings,
+    )
+
+
+def _apply_heat_leverage_caps(
+    candidate: CandidateTrade,
+    exposure: SiloExposure,
+    cfg: SizingConfig,
+    *,
+    qty_pre_cap: float,
+    rpu: float,
+    layers: list[LayerResult],
+) -> _CapResult:
+    max_qty_heat = float("inf")
+    max_qty_lev = float("inf")
+    notional_per = _notional_per_unit(candidate)
+
+    remaining_heat_budget = cfg.heat_cap * exposure.silo_equity - exposure.open_dollar_risk
+    if remaining_heat_budget <= 0:
+        max_qty_heat = 0.0
+    else:
+        max_qty_heat = remaining_heat_budget / rpu
+
+    if notional_per > 0:
+        remaining_notional = cfg.leverage_cap * exposure.silo_equity - exposure.open_delta_notional
+        max_qty_lev = max(0.0, remaining_notional / notional_per) if remaining_notional > 0 else 0.0
+
+    qty_final = max(min(qty_pre_cap, max_qty_heat, max_qty_lev), 0.0)
+    dollar_risk = qty_final * rpu
+    spot = candidate.spot_price or candidate.entry_price
+
+    if candidate.asset_type == AssetType.OPTION:
+        delta = candidate.option_delta if candidate.option_delta is not None else 0.5
+        delta_notional = delta_adjusted_notional(0, spot, [(qty_final, delta)])
+    elif candidate.asset_type == AssetType.STOCK:
+        delta_notional = qty_final * spot
+    else:
+        delta_notional = qty_final * notional_per
+
+    heat_after = portfolio_heat(exposure.open_dollar_risk + dollar_risk, exposure.silo_equity)
+    lev_after = leverage_ratio(exposure.open_delta_notional + delta_notional, exposure.silo_equity)
+
+    layers.append(
+        LayerResult(
+            layer=6,
+            name="Heat & leverage ceilings",
+            recommended_qty=qty_final,
+            detail=(
+                f"Heat cap {cfg.heat_cap:.0%} → max {max_qty_heat:.1f} units; "
+                f"Leverage cap {cfg.leverage_cap:.1f}× → max {max_qty_lev:.1f} units"
+            ),
+        )
+    )
+
+    return _CapResult(
+        qty_final=qty_final,
+        max_qty_heat=max_qty_heat,
+        max_qty_lev=max_qty_lev,
+        dollar_risk=dollar_risk,
+        delta_notional=delta_notional,
+        heat_after=heat_after,
+        lev_after=lev_after,
+    )
+
+
+def _resolve_binding_constraint(
+    *,
+    candidate: CandidateTrade,
+    qty_final: float,
+    qty_pre_cap: float,
+    qty_l2: float,
+    qty_l3: float,
+    qty_l4: float,
+    max_qty_heat: float,
+    max_qty_lev: float,
+    throttle_mult: float,
+) -> BindingConstraint:
+    binding = BindingConstraint.FRACTIONAL_RISK
+
+    if qty_final == 0 and max_qty_heat <= 0:
+        binding = BindingConstraint.HEAT_CAP
+    elif abs(qty_final - max_qty_lev) < 1e-6 and qty_final < qty_pre_cap:
+        binding = BindingConstraint.LEVERAGE_CAP
+    elif abs(qty_final - max_qty_heat) < 1e-6 and qty_final < qty_pre_cap:
+        binding = BindingConstraint.HEAT_CAP
+    elif qty_l4 < qty_l2 and abs(qty_final - qty_l4) < 1e-6:
+        binding = BindingConstraint.KELLY
+    elif candidate.atr and qty_l3 < qty_l2 and abs(qty_final - qty_l3) < 1e-6:
+        binding = BindingConstraint.VOLATILITY
+
+    if throttle_mult < 1.0:
+        binding = BindingConstraint.DRAWDOWN_THROTTLE
+
+    return binding
+
+
+def _build_rationale(
+    *,
+    candidate: CandidateTrade,
+    risk_basis: str,
+    qty_final: float,
+    dollar_risk: float,
+    delta_notional: float,
+    heat_after: float,
+    lev_after: float,
+    binding: BindingConstraint,
+    cfg: SizingConfig,
+    max_qty_heat: float,
+) -> str:
+    unit_label = "contracts" if candidate.asset_type != AssetType.STOCK else "shares"
+    rationale_parts = [
+        f"Recommended **{qty_final:.2f}** {unit_label} ({int(qty_final)} whole) on {candidate.underlying} "
+        f"({candidate.silo.value}, {risk_basis}).",
+        f"Dollar risk **${dollar_risk:,.0f}**; delta-notional **${delta_notional:,.0f}**.",
+        f"Post-trade heat **{heat_after:.1%}**, leverage **{lev_after:.2f}×**.",
+    ]
+
+    if binding == BindingConstraint.HEAT_CAP and qty_final == 0 and max_qty_heat <= 0:
+        rationale_parts.append(
+            f"**Binding constraint: portfolio heat** — open risk already at or above {cfg.heat_cap:.0%} of equity."
+        )
+    elif binding == BindingConstraint.LEVERAGE_CAP:
+        rationale_parts.append(
+            f"**Binding constraint: leverage cap** ({cfg.leverage_cap:.1f}×) — not per-trade fractional risk."
+        )
+    elif binding == BindingConstraint.HEAT_CAP:
+        rationale_parts.append(
+            f"**Binding constraint: portfolio heat** ({cfg.heat_cap:.0%}) — not per-trade fractional risk."
+        )
+    elif binding == BindingConstraint.KELLY:
+        rationale_parts.append(
+            "**Binding constraint: fractional Kelly** (below fractional-risk baseline)."
+        )
+    elif binding == BindingConstraint.VOLATILITY:
+        rationale_parts.append(
+            "**Binding constraint: volatility normalization** (wider stop / higher ATR)."
+        )
+    elif binding != BindingConstraint.DRAWDOWN_THROTTLE:
+        rationale_parts.append(
+            "**Binding constraint: fractional risk** (Kelly and ceilings not tighter)."
+        )
+
+    return "\n\n".join(rationale_parts)
+
+
 def recommend_size(
     candidate: CandidateTrade,
     exposure: SiloExposure,
@@ -232,190 +504,65 @@ def recommend_size(
     )
     effective_f = tier_f * throttle_mult
 
-    # Layer 2 — fractional risk
-    qty_l2 = fractional_risk_size(exposure.silo_equity, effective_f, rpu)
-    layers.append(
-        LayerResult(
-            layer=2,
-            name="Fractional risk",
-            recommended_qty=qty_l2,
-            effective_f=effective_f,
-            detail=f"{effective_f:.2%} × ${exposure.silo_equity:,.0f} equity / ${rpu:,.2f} risk per unit ({tier_label})",
-        )
+    layer_out = _compute_sizing_layers(
+        candidate,
+        exposure,
+        cfg,
+        effective_f=effective_f,
+        tier_f=tier_f,
+        tier_label=tier_label,
+        throttle_mult=throttle_mult,
+        rpu=rpu,
+        events=events,
+        optimal_f_override=optimal_f_override,
+    )
+    warnings.extend(layer_out.warnings)
+
+    cap_out = _apply_heat_leverage_caps(
+        candidate,
+        exposure,
+        cfg,
+        qty_pre_cap=layer_out.qty_pre_cap,
+        rpu=rpu,
+        layers=layer_out.layers,
     )
 
-    # Layer 3 — volatility normalization
-    qty_l3 = qty_l2
-    if candidate.atr and candidate.atr > 0 and cfg.reference_atr and cfg.reference_atr > 0:
-        vol_factor = cfg.reference_atr / candidate.atr
-        qty_l3 = qty_l2 * vol_factor
-        layers.append(
-            LayerResult(
-                layer=3,
-                name="Volatility normalization",
-                recommended_qty=qty_l3,
-                detail=f"ATR scale {vol_factor:.2f}× (ref {cfg.reference_atr:.2f} / instrument {candidate.atr:.2f})",
-            )
-        )
-    else:
-        layers.append(
-            LayerResult(
-                layer=3,
-                name="Volatility normalization",
-                recommended_qty=qty_l3,
-                detail="Skipped — no ATR or reference ATR configured",
-            )
-        )
-
-    # Layer 4 — fractional Kelly (lower CI when available)
-    optimal_f, optimal_f_lower = None, None
-    if optimal_f_override is not None:
-        optimal_f = optimal_f_override
-    elif events:
-        optimal_f, optimal_f_lower = _optimal_f_for_silo(events, candidate.silo, cfg)
-
-    kelly_f_used = None
-    qty_l4 = qty_l3
-    if optimal_f is not None:
-        base_kelly_f = (
-            optimal_f_lower
-            if (cfg.use_kelly_lower_ci and optimal_f_lower is not None)
-            else optimal_f
-        )
-        kelly_f_used = base_kelly_f * cfg.kelly_fraction * throttle_mult
-        qty_l4 = fractional_risk_size(exposure.silo_equity, kelly_f_used, rpu)
-        ci_note = "lower-CI optimal-f" if optimal_f_lower is not None else "point optimal-f"
-        layers.append(
-            LayerResult(
-                layer=4,
-                name="Fractional Kelly",
-                recommended_qty=qty_l4,
-                effective_f=kelly_f_used,
-                detail=f"{cfg.kelly_fraction:.0%} Kelly on {ci_note} ({base_kelly_f:.3f} → {kelly_f_used:.3%} of equity)",
-            )
-        )
-    else:
-        layers.append(
-            LayerResult(
-                layer=4,
-                name="Fractional Kelly",
-                recommended_qty=qty_l4,
-                detail="Skipped — insufficient closed-trade history for optimal-f",
-            )
-        )
-        warnings.append("Kelly layer inactive until more closed trades exist in this silo.")
-
-    # Layer 5 — equity scaling (already in effective_f via tiers)
-    layers.append(
-        LayerResult(
-            layer=5,
-            name="Equity scaling",
-            recommended_qty=qty_l3,
-            effective_f=tier_f,
-            detail=f"Tier '{tier_label}' → base f {cfg.base_risk_f:.2%} × {tier_f / cfg.base_risk_f:.1f}",
-        )
+    binding = _resolve_binding_constraint(
+        candidate=candidate,
+        qty_final=cap_out.qty_final,
+        qty_pre_cap=layer_out.qty_pre_cap,
+        qty_l2=layer_out.qty_l2,
+        qty_l3=layer_out.qty_l3,
+        qty_l4=layer_out.qty_l4,
+        max_qty_heat=cap_out.max_qty_heat,
+        max_qty_lev=cap_out.max_qty_lev,
+        throttle_mult=throttle_mult,
     )
 
-    qty_pre_cap = min(qty_l2, qty_l3, qty_l4)
-
-    # Layer 6 — heat & leverage ceilings
-    max_qty_heat = float("inf")
-    max_qty_lev = float("inf")
-    notional_per = _notional_per_unit(candidate)
-
-    remaining_heat_budget = cfg.heat_cap * exposure.silo_equity - exposure.open_dollar_risk
-    if remaining_heat_budget <= 0:
-        max_qty_heat = 0.0
-    else:
-        max_qty_heat = remaining_heat_budget / rpu
-
-    if notional_per > 0:
-        remaining_notional = cfg.leverage_cap * exposure.silo_equity - exposure.open_delta_notional
-        max_qty_lev = max(0.0, remaining_notional / notional_per) if remaining_notional > 0 else 0.0
-
-    qty_final = min(qty_pre_cap, max_qty_heat, max_qty_lev)
-    qty_final = max(qty_final, 0.0)
-
-    dollar_risk = qty_final * rpu
-    spot = candidate.spot_price or candidate.entry_price
-    if candidate.asset_type == AssetType.OPTION:
-        delta = candidate.option_delta if candidate.option_delta is not None else 0.5
-        delta_notional = delta_adjusted_notional(0, spot, [(qty_final, delta)])
-    elif candidate.asset_type == AssetType.STOCK:
-        delta_notional = qty_final * spot
-    else:
-        delta_notional = qty_final * notional_per
-
-    heat_after = portfolio_heat(exposure.open_dollar_risk + dollar_risk, exposure.silo_equity)
-    lev_after = leverage_ratio(exposure.open_delta_notional + delta_notional, exposure.silo_equity)
-
-    layers.append(
-        LayerResult(
-            layer=6,
-            name="Heat & leverage ceilings",
-            recommended_qty=qty_final,
-            detail=(
-                f"Heat cap {cfg.heat_cap:.0%} → max {max_qty_heat:.1f} units; "
-                f"Leverage cap {cfg.leverage_cap:.1f}× → max {max_qty_lev:.1f} units"
-            ),
-        )
+    rationale = _build_rationale(
+        candidate=candidate,
+        risk_basis=risk_basis,
+        qty_final=cap_out.qty_final,
+        dollar_risk=cap_out.dollar_risk,
+        delta_notional=cap_out.delta_notional,
+        heat_after=cap_out.heat_after,
+        lev_after=cap_out.lev_after,
+        binding=binding,
+        cfg=cfg,
+        max_qty_heat=cap_out.max_qty_heat,
     )
-
-    binding = BindingConstraint.FRACTIONAL_RISK
-    rationale_parts = [
-        f"Recommended **{qty_final:.2f}** units ({int(qty_final)} whole) on {candidate.underlying} "
-        f"({candidate.silo.value}, {risk_basis}).",
-        f"Dollar risk **${dollar_risk:,.0f}**; delta-notional **${delta_notional:,.0f}**.",
-        f"Post-trade heat **{heat_after:.1%}**, leverage **{lev_after:.2f}×**.",
-    ]
-
-    if qty_final == 0 and max_qty_heat <= 0:
-        binding = BindingConstraint.HEAT_CAP
-        rationale_parts.append(
-            f"**Binding constraint: portfolio heat** — open risk already at or above {cfg.heat_cap:.0%} of equity."
-        )
-    elif abs(qty_final - max_qty_lev) < 1e-6 and qty_final < qty_pre_cap:
-        binding = BindingConstraint.LEVERAGE_CAP
-        rationale_parts.append(
-            f"**Binding constraint: leverage cap** ({cfg.leverage_cap:.1f}×) — not per-trade fractional risk."
-        )
-    elif abs(qty_final - max_qty_heat) < 1e-6 and qty_final < qty_pre_cap:
-        binding = BindingConstraint.HEAT_CAP
-        rationale_parts.append(
-            f"**Binding constraint: portfolio heat** ({cfg.heat_cap:.0%}) — not per-trade fractional risk."
-        )
-    elif qty_l4 < qty_l2 and abs(qty_final - qty_l4) < 1e-6:
-        binding = BindingConstraint.KELLY
-        rationale_parts.append(
-            "**Binding constraint: fractional Kelly** (below fractional-risk baseline)."
-        )
-    elif candidate.atr and qty_l3 < qty_l2 and abs(qty_final - qty_l3) < 1e-6:
-        binding = BindingConstraint.VOLATILITY
-        rationale_parts.append(
-            "**Binding constraint: volatility normalization** (wider stop / higher ATR)."
-        )
-    else:
-        rationale_parts.append(
-            "**Binding constraint: fractional risk** (Kelly and ceilings not tighter)."
-        )
-
-    if throttle_mult < 1.0:
-        binding = BindingConstraint.DRAWDOWN_THROTTLE
-
-    unit_label = "contracts" if candidate.asset_type != AssetType.STOCK else "shares"
-    rationale_parts[0] = rationale_parts[0].replace("units", unit_label)
 
     return SizeRecommendation(
-        recommended_qty=qty_final,
-        recommended_qty_int=int(qty_final),
-        dollar_risk=dollar_risk,
-        delta_notional=delta_notional,
+        recommended_qty=cap_out.qty_final,
+        recommended_qty_int=int(cap_out.qty_final),
+        dollar_risk=cap_out.dollar_risk,
+        delta_notional=cap_out.delta_notional,
         binding_constraint=binding,
-        rationale="\n\n".join(rationale_parts),
-        layers=layers,
-        heat_after=heat_after,
-        leverage_after=lev_after,
-        kelly_target_f=kelly_f_used,
+        rationale=rationale,
+        layers=layer_out.layers,
+        heat_after=cap_out.heat_after,
+        leverage_after=cap_out.lev_after,
+        kelly_target_f=layer_out.kelly_f_used,
         warnings=warnings,
     )
 

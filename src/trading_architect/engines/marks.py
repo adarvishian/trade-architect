@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Protocol, runtime_checkable
 
+from trading_architect.config.defaults import DEFAULT_IV_FALLBACK
+
 _OPTION_SYMBOL = re.compile(
     r"^(?P<ticker>[A-Z]{1,6})_(?P<exp>\d{4}-\d{2}-\d{2})_(?P<right>[CP])_(?P<strike>[\d.]+)$"
 )
@@ -90,7 +92,7 @@ def _delta_with_fallback(
     else:
         time_years = max((expiry - date.today()).days / 365.0, 1 / 365.0)
     iv_fallback = not (iv and iv > 0)
-    vol = iv if iv and iv > 0 else 0.2
+    vol = iv if iv and iv > 0 else DEFAULT_IV_FALLBACK
     from trading_architect.engines.options_pricing import bs_greeks
 
     return bs_greeks(spot, use_strike, time_years, 0.05, vol, use_right)["delta"], iv_fallback

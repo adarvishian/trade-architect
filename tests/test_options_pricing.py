@@ -1,5 +1,7 @@
 """Tests for Black-Scholes pricing (PRD A.9)."""
 
+import math
+
 import pytest
 
 from trading_architect.engines.options_pricing import black_scholes_price, implied_vol_bisect
@@ -8,6 +10,14 @@ from trading_architect.engines.options_pricing import black_scholes_price, impli
 def test_call_price_positive():
     px = black_scholes_price(100, 100, 0.25, 0.05, 0.25, "C")
     assert px > 0
+
+
+def test_put_call_parity():
+    spot, strike, t, rate, vol = 100.0, 100.0, 0.5, 0.05, 0.30
+    call = black_scholes_price(spot, strike, t, rate, vol, "C")
+    put = black_scholes_price(spot, strike, t, rate, vol, "P")
+    forward_adjusted_strike = strike * math.exp(-rate * t)
+    assert call - put == pytest.approx(spot - forward_adjusted_strike, rel=1e-6)
 
 
 def test_put_call_parity_region():

@@ -177,3 +177,14 @@ Uses `sqlite3.Connection.backup()` with a WAL checkpoint for a consistent copy. 
 ```bash
 0 2 * * * cd /path/to/trading-architect && python scripts/backup_db.py
 ```
+
+## Known limitations
+
+These behaviors are intentional defaults, not bugs — but they affect how you should interpret outputs:
+
+- **Stale marks → cost basis.** Open legs without a live mark are priced at cost basis in MTM equity (zero open P&L contribution). The Dashboard, `ta marks`, and drawdown governor may understate drawdown until marks refresh. Fallback counts are surfaced when active.
+- **Default IV for delta estimates.** When live implied volatility is unavailable, delta is estimated with a 20% IV fallback (`DEFAULT_IV_FALLBACK` in `config/defaults.py`).
+- **Robinhood API fragility.** The optional Robinhood fetch path wraps a private API (`robin-stocks`) that breaks when Robinhood changes internals. Prefer CSV import when available; unresolved API rows land in the review queue.
+- **Options expiring before hold horizon.** The contract selector prices contracts that expire before the intended hold at intrinsic (t=0) rather than excluding them. Check DTE vs. `hold_days` when ranking.
+- **Thin correlation data.** When return history is missing or too short, distinct underlyings are assumed correlated (default 0.6) so the drawdown governor stays conservative. Measured correlations replace the fallback once enough overlapping observations exist.
+- **Degenerate equity inputs.** Drawdown returns 0% when peak equity ≤ 0; optimal-f returns 0 when the trade history has negative edge or every tested f produces ruin.

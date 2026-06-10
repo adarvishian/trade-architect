@@ -43,6 +43,7 @@ def compute_r_distribution(r_values: list[float]) -> RDistributionStats | None:
     arr = np.array(clean, dtype=float)
     win_rate = float(np.mean(arr > 0))
     optimal_f = _estimate_optimal_f(arr)
+    skew_val = _compute_skew(arr)
 
     return RDistributionStats(
         count=len(arr),
@@ -50,7 +51,7 @@ def compute_r_distribution(r_values: list[float]) -> RDistributionStats | None:
         mean_r=float(np.mean(arr)),
         std_r=float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0,
         median_r=float(np.median(arr)),
-        skew=float(stats.skew(arr)) if len(arr) > 2 else 0.0,
+        skew=skew_val,
         win_rate=win_rate,
         p05_r=float(np.percentile(arr, 5)),
         p95_r=float(np.percentile(arr, 95)),
@@ -61,6 +62,13 @@ def compute_r_distribution(r_values: list[float]) -> RDistributionStats | None:
 
 def _clean_r_values(r_values: list[float]) -> list[float]:
     return [r for r in r_values if r is not None and np.isfinite(r)]
+
+
+def _compute_skew(arr: np.ndarray) -> float:
+    """Sample skew; returns 0 when variance is degenerate (avoids scipy precision warnings)."""
+    if len(arr) <= 2 or len(np.unique(arr)) < 2:
+        return 0.0
+    return float(stats.skew(arr))
 
 
 def bootstrap_resample_stats(

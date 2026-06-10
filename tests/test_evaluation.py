@@ -1,5 +1,6 @@
 """Tests for M2 evaluation engine."""
 
+import warnings
 from datetime import datetime
 
 import pytest
@@ -55,6 +56,21 @@ def test_r_distribution_basic_stats():
 
 def test_r_distribution_negative_edge_returns_zero_optimal_f():
     stats = compute_r_distribution([-1.0, -0.5, -2.0, -1.5])
+    assert stats is not None
+    assert stats.optimal_f == 0.0
+
+
+def test_r_distribution_constant_samples_no_skew_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        stats = compute_r_distribution([1.0, 1.0, 1.0, 1.0, 1.0])
+    assert stats is not None
+    assert stats.skew == 0.0
+
+
+def test_optimal_f_floored_at_zero_for_ruinous_grid():
+    """Growth-optimal f stays at 0 when every tested f produces ruin (1 + fR <= 0)."""
+    stats = compute_r_distribution([-2.0, -3.0, -1.5, -2.5])
     assert stats is not None
     assert stats.optimal_f == 0.0
 

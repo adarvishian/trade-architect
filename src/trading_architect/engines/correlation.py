@@ -12,14 +12,18 @@ as conservative as a uniform governor until data proves independence.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Protocol, runtime_checkable
 
-# A pair at/above this Pearson correlation is treated as one bet by default.
-DEFAULT_CORRELATION_THRESHOLD = 0.5
-# Assumed correlation between distinct underlyings when data is unavailable.
-DEFAULT_ASSUMED_CORRELATION = 0.6
+from trading_architect.config.defaults import (
+    DEFAULT_ASSUMED_CORRELATION,
+    DEFAULT_CORRELATION_THRESHOLD,
+)
+
+logger = logging.getLogger(__name__)
+
 # Minimum overlapping observations before a measured correlation is trusted.
 DEFAULT_MIN_OBSERVATIONS = 20
 
@@ -66,12 +70,32 @@ class ReturnsCorrelationProvider:
         ra = self.returns.get(a)
         rb = self.returns.get(b)
         if not ra or not rb:
+            logger.debug(
+                "Correlation fallback for %s/%s: missing return series → %.2f",
+                a,
+                b,
+                self.default_correlation,
+            )
             return self.default_correlation
         n = min(len(ra), len(rb))
         if n < self.min_observations:
+            logger.debug(
+                "Correlation fallback for %s/%s: only %d observations (need %d) → %.2f",
+                a,
+                b,
+                n,
+                self.min_observations,
+                self.default_correlation,
+            )
             return self.default_correlation
         value = _pearson(list(ra)[-n:], list(rb)[-n:])
         if value is None:
+            logger.debug(
+                "Correlation fallback for %s/%s: zero-variance series → %.2f",
+                a,
+                b,
+                self.default_correlation,
+            )
             return self.default_correlation
         return value
 

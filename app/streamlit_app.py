@@ -170,10 +170,14 @@ elif page == "Import Data":
                 tmp.write(uploaded.getvalue())
                 tmp_path = Path(tmp.name)
 
-            result = import_and_assemble(
-                tmp_path, broker=broker, account=account or None, repo=repo
-            )
-            st.cache_resource.clear()
+            try:
+                result = import_and_assemble(
+                    tmp_path, broker=broker, account=account or None, repo=repo
+                )
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+            get_repository.clear()
             st.success(
                 f"Imported **{result.imported}** events "
                 f"({result.skipped_duplicates} duplicates skipped, "
@@ -274,7 +278,7 @@ elif page == "Import Data":
                             save_csv=save_audit_csv,
                             repo=repo,
                         )
-                        st.cache_resource.clear()
+                        get_repository.clear()
                         st.success(
                             f"Imported **{result.imported}** events from Robinhood API "
                             f"({result.skipped_duplicates} duplicates skipped)."
@@ -500,7 +504,7 @@ elif page == "Import Data":
                             save_csv=save_audit,
                             repo=repo,
                         )
-                        st.cache_resource.clear()
+                        get_repository.clear()
                         st.success(
                             f"Imported **{result.imported}** events from Schwab API "
                             f"({result.skipped_duplicates} duplicates skipped, "
@@ -722,10 +726,12 @@ elif page == "Option Selector":
             tmp.write(chain_file.getvalue())
             tmp_path = Path(tmp.name)
 
-        snapshot = parse_chain_csv(tmp_path, underlying, spot, iv_rank=iv_rank_val)
-
-        result = _run_option_rank(snapshot)
-        _display_option_results(result)
+        try:
+            snapshot = parse_chain_csv(tmp_path, underlying, spot, iv_rank=iv_rank_val)
+            result = _run_option_rank(snapshot)
+            _display_option_results(result)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
 elif page == "Current Positions":
     st.header("Current Positions")
