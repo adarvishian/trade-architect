@@ -17,6 +17,7 @@ from trading_architect.models.entities import (
     PositionStatus,
     Silo,
 )
+from trading_architect.services.position_stops import apply_position_overrides
 from trading_architect.store.repository import HoldingSnapshotRecord, Repository
 
 
@@ -111,7 +112,7 @@ def current_positions(
 
     marks_provider = marks_provider if marks_provider is not None else default_marks_provider()
     enriched = enrich_positions_with_marks(positions, marks_provider, events=[])
-    return enriched
+    return apply_position_overrides(enriched, repo)
 
 
 def silo_equity_from_snapshots(

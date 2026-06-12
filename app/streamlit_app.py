@@ -38,6 +38,11 @@ from trading_architect.config.user_settings import (
     app_settings_to_json,
     diff_app_settings,
 )
+from trading_architect.engines.capital import (
+    deployable_capital,
+    monthly_net_cashflow,
+    project_equity,
+)
 from trading_architect.ingestion.robinhood_fetch import (
     fetch_portfolio_snapshot,
     format_holding_label,
@@ -50,6 +55,7 @@ from trading_architect.ingestion.schwab_accounts import list_accounts
 from trading_architect.ingestion.schwab_auth import schwab_connection_status, schwab_py_available
 from trading_architect.models.entities import Silo
 from trading_architect.services.current_state import account_cards, current_positions
+from trading_architect.services.position_stops import has_stop
 from trading_architect.services.snapshot_persist import persist_manual_balance
 from trading_architect.services.sync import sync_all
 
@@ -127,6 +133,42 @@ render_ops_banner(st.session_state.get("sync_results"))
 
 if page == "Dashboard":
     st.header("Dashboard")
+
+    deploy = deployable_capital(repo, settings)
+    if deploy.total_capital > 0 or repo.list_accounts():
+        st.subheader("What can I allocate")
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Total capital", f"${deploy.total_capital:,.0f}")
+        d2.metric("Deployable", f"${deploy.deployable_total:,.0f}")
+        d3.metric("Brokerage cash", f"${deploy.brokerage_cash:,.0f}")
+        d4.metric("Reserve held", f"${deploy.reserve_held:,.0f}")
+        st.caption(
+            f"Breakdown: brokerage cash **${deploy.brokerage_cash:,.0f}** + "
+            f"transferable **${deploy.transferable_cash:,.0f}** + "
+            f"next month net **${deploy.monthly_net_cashflow:,.0f}** "
+            f"(income ${settings.monthly_income_after_tax:,.0f} − expenses ${settings.monthly_expenses:,.0f}). "
+            f"Reserve = {settings.cash_reserve_months}× expenses."
+        )
+        if deploy.as_of:
+            st.caption(f"As of {deploy.as_of.strftime('%Y-%m-%d %H:%M UTC')}")
+
+        st.subheader("Equity projection")
+        return_pct = st.number_input(
+            "Annual return assumption (%)",
+            value=0.0,
+            min_value=-50.0,
+            max_value=100.0,
+            step=1.0,
+            key="proj_return_pct",
+            help="User-set scenario only — not estimated from trade history.",
+        )
+        contrib = monthly_net_cashflow(settings)
+        base_equity = book.account_equity
+        for months in (6, 12):
+            series = project_equity(base_equity, contrib, return_pct / 100.0, months)
+            projected = series[-1]
+            st.metric(f"{months}-month projected equity", f"${projected:,.0f}")
+
     if not events:
         st.info("Link accounts under **Accounts** or import history for evaluation.")
     else:
@@ -641,16 +683,23 @@ elif page == "Size a Trade":
         stop = st.number_input("Stop price", value=95.0, min_value=0.01, key="size_stop")
 
     atr = st.number_input(
-        "ATR (optional, vol normalization)", value=0.0, min_value=0.0, key="size_atr"
+        "ATR (optional, unused — vol layer removed)", value=0.0, min_value=0.0, key="size_atr"
     )
 
+    silo_cash, silo_bp = None, None
+    from trading_architect.engines.capital import silo_brokerage_liquidity
+
+    silo_cash, silo_bp = silo_brokerage_liquidity(repo, silo)
     st.subheader("Book context")
     st.caption(
         f"Silo equity **${silo_state.equity:,.0f}** · open risk **${silo_state.open_dollar_risk:,.0f}** · "
-        f"drawdown **{book.effective_drawdown_pct:.1%}** ({book.effective_governor.state.value})"
+        f"brokerage cash **${silo_cash:,.0f}** · drawdown **{book.effective_drawdown_pct:.1%}** "
+        f"({book.effective_governor.state.value})"
     )
 
     if st.button("Recommend size", type="primary", key="size_btn"):
+        import json
+
         candidate = CandidateTrade(
             silo=silo,
             underlying=underlying,
@@ -664,8 +713,27 @@ elif page == "Size a Trade":
             atr=atr if atr > 0 else None,
             symbol=underlying,
         )
-        exposure = book.exposure_for_silo(silo)
+        exposure = book.exposure_for_silo(silo, repo=repo, settings=settings)
         rec = recommend_size(candidate, exposure, config=settings.sizing, events=events)
+        repo.record_size_recommendation(
+            ts=datetime.now(timezone.utc),
+            silo=silo,
+            underlying=underlying,
+            asset_type=asset_val,
+            recommended_qty=rec.recommended_qty,
+            dollar_risk=rec.dollar_risk,
+            binding_constraint=rec.binding_constraint.value,
+            inputs_json=json.dumps(
+                {
+                    "entry": entry,
+                    "stop": stop,
+                    "premium": premium,
+                    "spot": spot or entry,
+                    "delta": delta,
+                }
+            ),
+            silo_equity=silo_state.equity,
+        )
         st.metric("Recommended size", f"{rec.recommended_qty_int:,} units")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Dollar risk", f"${rec.dollar_risk:,.0f}")
@@ -843,11 +911,15 @@ elif page == "Current Positions":
         st.info("No positions match. Import broker CSVs to get started.")
     else:
         cfg = settings.sizing
+        overrides = {
+            (o.symbol, o.silo.value): o for o in repo.list_position_overrides()
+        }
         rows = []
         for p in filtered:
             silo_state = book.stock_options if p.silo == Silo.STOCK_OPTIONS else book.futures
             pos_heat = p.total_dollar_risk / silo_state.equity if silo_state.equity > 0 else 0.0
             pos_lev = p.current_delta_notional / silo_state.equity if silo_state.equity > 0 else 0.0
+            stop_set = has_stop(p, repo)
             rows.append(
                 {
                     "underlying": p.underlying,
@@ -856,6 +928,8 @@ elif page == "Current Positions":
                     "direction": p.direction.value,
                     "status": p.status.value,
                     "total_risk": p.total_dollar_risk,
+                    "open_r": round(p.open_r, 2) if p.open_r is not None else None,
+                    "no_stop": "⚠ no stop" if not stop_set and p.status.value == "open" else "",
                     "pos_heat": pos_heat,
                     "notional": p.current_delta_notional,
                     "pos_leverage": pos_lev,
@@ -868,6 +942,46 @@ elif page == "Current Positions":
             )
         df = pd.DataFrame(rows)
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+        open_positions = [p for p in filtered if p.status.value == "open"]
+        if open_positions:
+            st.subheader("Edit stops (stock positions)")
+            st.caption("Stops feed portfolio heat and open-R. Options use premium-at-risk automatically.")
+            stop_rows = []
+            for p in open_positions:
+                ov = overrides.get((p.underlying, p.silo.value))
+                stop_rows.append(
+                    {
+                        "underlying": p.underlying,
+                        "silo": p.silo.value,
+                        "initial_stop": ov.initial_stop if ov else None,
+                        "current_stop": ov.current_stop if ov else None,
+                    }
+                )
+            stop_df = pd.DataFrame(stop_rows)
+            edited = st.data_editor(
+                stop_df,
+                num_rows="fixed",
+                column_config={
+                    "initial_stop": st.column_config.NumberColumn("Initial stop", format="%.2f"),
+                    "current_stop": st.column_config.NumberColumn("Current stop", format="%.2f"),
+                },
+                key="position_stops_editor",
+            )
+            if st.button("Save stops", key="save_position_stops"):
+                for _, row in edited.iterrows():
+                    init = row["initial_stop"]
+                    curr = row["current_stop"]
+                    if init is not None or curr is not None:
+                        repo.upsert_position_override(
+                            symbol=str(row["underlying"]),
+                            silo=Silo(row["silo"]),
+                            initial_stop=float(init) if init is not None and not pd.isna(init) else None,
+                            current_stop=float(curr) if curr is not None and not pd.isna(curr) else None,
+                        )
+                get_repository.clear()
+                st.success("Stops saved — heat and open-R will update on refresh.")
+                st.rerun()
 
         if status_filter in ("open", "All"):
             open_by_silo = (
@@ -1081,8 +1195,8 @@ elif page == "Settings":
 
     from trading_architect.models.entities import MethodologyEpoch
 
-    tab_equity, tab_sizing, tab_risk, tab_epochs, tab_log = st.tabs(
-        ["Starting equity", "Sizing & caps", "Risk appetite", "Epochs", "Override log"]
+    tab_equity, tab_cashflow, tab_sizing, tab_risk, tab_epochs, tab_log = st.tabs(
+        ["Starting equity", "Cashflow", "Sizing & caps", "Risk appetite", "Epochs", "Override log"]
     )
 
     if "settings_draft" not in st.session_state:
@@ -1119,6 +1233,35 @@ elif page == "Settings":
         )
         st.caption(
             "Fallback equity when no broker snapshots exist; also used for alpha-left evaluation."
+        )
+
+    with tab_cashflow:
+        draft.monthly_income_after_tax = st.number_input(
+            "Monthly income (after tax)",
+            value=float(draft.monthly_income_after_tax),
+            step=500.0,
+            key="set_monthly_income",
+        )
+        draft.monthly_expenses = st.number_input(
+            "Monthly expenses",
+            value=float(draft.monthly_expenses),
+            step=500.0,
+            key="set_monthly_expenses",
+        )
+        draft.cash_reserve_months = int(
+            st.number_input(
+                "Cash reserve (months of expenses)",
+                value=int(draft.cash_reserve_months),
+                min_value=0,
+                max_value=24,
+                step=1,
+                key="set_reserve_months",
+            )
+        )
+        net = draft.monthly_income_after_tax - draft.monthly_expenses
+        reserve_amt = draft.cash_reserve_months * draft.monthly_expenses
+        st.caption(
+            f"Monthly net cashflow: **${net:,.0f}** · Reserve held back: **${reserve_amt:,.0f}**"
         )
 
     with tab_sizing:

@@ -161,6 +161,33 @@ CREATE INDEX IF NOT EXISTS idx_balance_snapshots_account ON balance_snapshots(ac
 CREATE INDEX IF NOT EXISTS idx_balance_snapshots_as_of ON balance_snapshots(as_of);
 CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_account ON holdings_snapshots(account_id);
 CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_as_of ON holdings_snapshots(as_of);
+
+CREATE TABLE IF NOT EXISTS position_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    silo TEXT NOT NULL,
+    initial_stop REAL,
+    current_stop REAL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(symbol, silo)
+);
+
+CREATE TABLE IF NOT EXISTS size_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    silo TEXT NOT NULL,
+    underlying TEXT NOT NULL,
+    asset_type TEXT NOT NULL,
+    recommended_qty REAL NOT NULL,
+    dollar_risk REAL NOT NULL,
+    binding_constraint TEXT NOT NULL,
+    inputs_json TEXT NOT NULL,
+    silo_equity REAL NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_size_recommendations_ts ON size_recommendations(ts);
+CREATE INDEX IF NOT EXISTS idx_position_overrides_silo ON position_overrides(silo);
 """
 
 
@@ -190,6 +217,7 @@ class Database:
             conn.executescript(SCHEMA)
             self._migrate_trade_events(conn)
             self._migrate_accounts(conn)
+            self._migrate_phase2(conn)
             for epoch in DEFAULT_EPOCHS:
                 conn.execute(
                     """
@@ -257,6 +285,51 @@ class Database:
                     ON holdings_snapshots(account_id);
                 CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_as_of
                     ON holdings_snapshots(as_of);
+                """
+            )
+
+    def _migrate_phase2(self, conn: sqlite3.Connection) -> None:
+        """Additive migrations for Phase 2 — position stops and size recommendations."""
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "position_overrides" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS position_overrides (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    silo TEXT NOT NULL,
+                    initial_stop REAL,
+                    current_stop REAL,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(symbol, silo)
+                );
+                CREATE INDEX IF NOT EXISTS idx_position_overrides_silo
+                    ON position_overrides(silo);
+                """
+            )
+        if "size_recommendations" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS size_recommendations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    silo TEXT NOT NULL,
+                    underlying TEXT NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    recommended_qty REAL NOT NULL,
+                    dollar_risk REAL NOT NULL,
+                    binding_constraint TEXT NOT NULL,
+                    inputs_json TEXT NOT NULL,
+                    silo_equity REAL NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_size_recommendations_ts
+                    ON size_recommendations(ts);
                 """
             )
 

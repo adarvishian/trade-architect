@@ -160,3 +160,37 @@ def test_delete_account_cascades_snapshots(repo: Repository):
     repo.delete_account(acct.id)
     assert repo.list_accounts() == []
     assert repo.latest_balance(acct.id) is None
+
+
+def test_position_override_upsert(repo: Repository):
+    repo.upsert_position_override(
+        symbol="AAPL",
+        silo=Silo.STOCK_OPTIONS,
+        initial_stop=140.0,
+        current_stop=145.0,
+    )
+    ov = repo.get_position_override("AAPL", Silo.STOCK_OPTIONS)
+    assert ov is not None
+    assert ov.initial_stop == pytest.approx(140.0)
+    assert ov.current_stop == pytest.approx(145.0)
+
+
+def test_size_recommendation_persist(repo: Repository):
+    from datetime import datetime, timezone
+
+    ts = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    rec = repo.record_size_recommendation(
+        ts=ts,
+        silo=Silo.STOCK_OPTIONS,
+        underlying="AAPL",
+        asset_type="stock",
+        recommended_qty=200.0,
+        dollar_risk=1000.0,
+        binding_constraint="fractional_risk",
+        inputs_json='{"entry": 100}',
+        silo_equity=100_000.0,
+    )
+    assert rec.id is not None
+    listed = repo.list_size_recommendations(limit=1)
+    assert len(listed) == 1
+    assert listed[0].underlying == "AAPL"

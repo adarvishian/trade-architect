@@ -34,6 +34,9 @@ class AppSettings:
     starting_equity_futures: float = 50_000.0
     schwab_account_hashes: dict[str, str] = field(default_factory=dict)
     refresh_interval_min: int = 15
+    monthly_income_after_tax: float = 0.0
+    monthly_expenses: float = 0.0
+    cash_reserve_months: int = 6
     sizing: SizingConfig = field(default_factory=lambda: SizingConfig())
     adaptive_risk: AdaptiveRiskConfig = field(default_factory=lambda: AdaptiveRiskConfig())
     option_selector: OptionSelectorConfig = field(default_factory=lambda: OptionSelectorConfig())
@@ -110,6 +113,9 @@ def app_settings_to_dict(settings: AppSettings) -> dict[str, Any]:
         "starting_equity_futures": settings.starting_equity_futures,
         "schwab_account_hashes": dict(settings.schwab_account_hashes),
         "refresh_interval_min": settings.refresh_interval_min,
+        "monthly_income_after_tax": settings.monthly_income_after_tax,
+        "monthly_expenses": settings.monthly_expenses,
+        "cash_reserve_months": settings.cash_reserve_months,
         "sizing": sizing_config_to_dict(settings.sizing),
         "adaptive_risk": adaptive_config_to_dict(settings.adaptive_risk),
         "option_selector": option_selector_to_dict(settings.option_selector),
@@ -139,6 +145,11 @@ def app_settings_from_dict(data: dict[str, Any]) -> AppSettings:
         ),
         schwab_account_hashes=schwab_hashes or defaults.schwab_account_hashes,
         refresh_interval_min=int(data.get("refresh_interval_min", defaults.refresh_interval_min)),
+        monthly_income_after_tax=float(
+            data.get("monthly_income_after_tax", defaults.monthly_income_after_tax)
+        ),
+        monthly_expenses=float(data.get("monthly_expenses", defaults.monthly_expenses)),
+        cash_reserve_months=int(data.get("cash_reserve_months", defaults.cash_reserve_months)),
         sizing=sizing,
         adaptive_risk=adaptive,
         option_selector=option_selector_from_dict(
@@ -172,6 +183,13 @@ def diff_app_settings(
             new.starting_equity_stock_options,
         ),
         ("starting_equity_futures", old.starting_equity_futures, new.starting_equity_futures),
+        (
+            "monthly_income_after_tax",
+            old.monthly_income_after_tax,
+            new.monthly_income_after_tax,
+        ),
+        ("monthly_expenses", old.monthly_expenses, new.monthly_expenses),
+        ("cash_reserve_months", old.cash_reserve_months, new.cash_reserve_months),
     ]
     for name, old_val, new_val in scalar_fields:
         if old_val != new_val:

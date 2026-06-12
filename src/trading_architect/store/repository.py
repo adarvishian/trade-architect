@@ -80,6 +80,30 @@ class HoldingSnapshotRecord:
     id: int | None = None
 
 
+@dataclass(frozen=True)
+class PositionOverrideRecord:
+    symbol: str
+    silo: Silo
+    initial_stop: float | None = None
+    current_stop: float | None = None
+    updated_at: datetime | None = None
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class SizeRecommendationRecord:
+    ts: datetime
+    silo: Silo
+    underlying: str
+    asset_type: str
+    recommended_qty: float
+    dollar_risk: float
+    binding_constraint: str
+    inputs_json: str
+    silo_equity: float
+    id: int | None = None
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -746,3 +770,151 @@ class Repository:
                     epoch.epoch_id,
                 ),
             )
+
+    def upsert_position_override(
+        self,
+        *,
+        symbol: str,
+        silo: Silo,
+        initial_stop: float | None,
+        current_stop: float | None,
+    ) -> PositionOverrideRecord:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO position_overrides (symbol, silo, initial_stop, current_stop, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, silo) DO UPDATE SET
+                    initial_stop = COALESCE(excluded.initial_stop, position_overrides.initial_stop),
+                    current_stop = excluded.current_stop,
+                    updated_at = excluded.updated_at
+                """,
+                (symbol, silo.value, initial_stop, current_stop, now),
+            )
+            row = conn.execute(
+                """
+                SELECT * FROM position_overrides WHERE symbol = ? AND silo = ?
+                """,
+                (symbol, silo.value),
+            ).fetchone()
+        return PositionOverrideRecord(
+            id=row["id"],
+            symbol=row["symbol"],
+            silo=Silo(row["silo"]),
+            initial_stop=row["initial_stop"],
+            current_stop=row["current_stop"],
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def list_position_overrides(self, *, silo: Silo | None = None) -> list[PositionOverrideRecord]:
+        query = "SELECT * FROM position_overrides WHERE 1=1"
+        params: list = []
+        if silo:
+            query += " AND silo = ?"
+            params.append(silo.value)
+        query += " ORDER BY symbol"
+        with self.db.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            PositionOverrideRecord(
+                id=row["id"],
+                symbol=row["symbol"],
+                silo=Silo(row["silo"]),
+                initial_stop=row["initial_stop"],
+                current_stop=row["current_stop"],
+                updated_at=_parse_dt(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def get_position_override(self, symbol: str, silo: Silo) -> PositionOverrideRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM position_overrides WHERE symbol = ? AND silo = ?",
+                (symbol, silo.value),
+            ).fetchone()
+        if not row:
+            return None
+        return PositionOverrideRecord(
+            id=row["id"],
+            symbol=row["symbol"],
+            silo=Silo(row["silo"]),
+            initial_stop=row["initial_stop"],
+            current_stop=row["current_stop"],
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def record_size_recommendation(
+        self,
+        *,
+        ts: datetime,
+        silo: Silo,
+        underlying: str,
+        asset_type: str,
+        recommended_qty: float,
+        dollar_risk: float,
+        binding_constraint: str,
+        inputs_json: str,
+        silo_equity: float,
+    ) -> SizeRecommendationRecord:
+        ts_iso = ts.astimezone(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO size_recommendations (
+                    ts, silo, underlying, asset_type, recommended_qty,
+                    dollar_risk, binding_constraint, inputs_json, silo_equity
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ts_iso,
+                    silo.value,
+                    underlying,
+                    asset_type,
+                    recommended_qty,
+                    dollar_risk,
+                    binding_constraint,
+                    inputs_json,
+                    silo_equity,
+                ),
+            )
+            row_id = cursor.lastrowid
+        return SizeRecommendationRecord(
+            id=row_id,
+            ts=ts,
+            silo=silo,
+            underlying=underlying,
+            asset_type=asset_type,
+            recommended_qty=recommended_qty,
+            dollar_risk=dollar_risk,
+            binding_constraint=binding_constraint,
+            inputs_json=inputs_json,
+            silo_equity=silo_equity,
+        )
+
+    def list_size_recommendations(self, limit: int = 50) -> list[SizeRecommendationRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM size_recommendations
+                ORDER BY ts DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            SizeRecommendationRecord(
+                id=row["id"],
+                ts=_parse_dt(row["ts"]),
+                silo=Silo(row["silo"]),
+                underlying=row["underlying"],
+                asset_type=row["asset_type"],
+                recommended_qty=row["recommended_qty"],
+                dollar_risk=row["dollar_risk"],
+                binding_constraint=row["binding_constraint"],
+                inputs_json=row["inputs_json"],
+                silo_equity=row["silo_equity"],
+            )
+            for row in rows
+        ]

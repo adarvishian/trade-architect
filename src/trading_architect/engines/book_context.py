@@ -60,16 +60,23 @@ class BookContext:
             return self.stock_options.equity
         return self.futures.equity
 
-    def exposure_for_silo(self, silo: Silo):
+    def exposure_for_silo(self, silo: Silo, *, repo=None, settings=None):
         from trading_architect.engines.sizing import SiloExposure
 
         state = self.stock_options if silo == Silo.STOCK_OPTIONS else self.futures
+        cash = buying_power = None
+        if repo is not None:
+            from trading_architect.engines.capital import silo_brokerage_liquidity
+
+            cash, buying_power = silo_brokerage_liquidity(repo, silo)
         return SiloExposure(
             silo_equity=state.equity,
             open_dollar_risk=state.open_dollar_risk,
             open_delta_notional=state.open_delta_notional,
             drawdown_pct=self.effective_drawdown_pct,
             peak_equity=state.peak_equity,
+            available_cash=cash,
+            buying_power=buying_power,
         )
 
 

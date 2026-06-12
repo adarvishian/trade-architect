@@ -93,14 +93,37 @@ def test_drawdown_hard_suspends_sizing():
     assert rec.binding_constraint == BindingConstraint.DRAWDOWN_THROTTLE
 
 
-def test_volatility_normalization_reduces_size():
-    cfg = SizingConfig(base_risk_f=0.01, reference_atr=2.0)
-    base = recommend_size(
-        _stock_candidate(atr=4.0),
-        SiloExposure(silo_equity=100_000.0),
-        config=cfg,
+def test_cash_cap_binding_options():
+    rec = recommend_size(
+        CandidateTrade(
+            silo=Silo.STOCK_OPTIONS,
+            underlying="TSLA",
+            direction=Direction.LONG,
+            asset_type=AssetType.OPTION,
+            entry_price=10.0,
+            premium_per_contract=10.0,
+            spot_price=250.0,
+            option_delta=0.35,
+        ),
+        SiloExposure(silo_equity=100_000.0, available_cash=500.0),
+        config=SizingConfig(base_risk_f=0.05),
     )
-    assert base.recommended_qty == pytest.approx(100.0)  # 200 × (2/4)
+    assert rec.recommended_qty == pytest.approx(0.5)
+    assert rec.binding_constraint == BindingConstraint.CASH_AVAILABLE
+
+
+def test_cash_cap_binding_stock():
+    rec = recommend_size(
+        _stock_candidate(entry=100.0, stop=95.0),
+        SiloExposure(
+            silo_equity=100_000.0,
+            available_cash=1_000.0,
+            buying_power=4_000.0,
+        ),
+        config=SizingConfig(base_risk_f=0.01),
+    )
+    assert rec.recommended_qty == pytest.approx(50.0)
+    assert rec.binding_constraint == BindingConstraint.CASH_AVAILABLE
 
 
 def test_kelly_layer_from_history():
@@ -140,7 +163,7 @@ def test_kelly_layer_from_history():
         SiloExposure(silo_equity=100_000.0),
         events=events,
     )
-    assert any(layer.layer == 4 for layer in rec.layers)
+    assert any(layer.layer == 3 for layer in rec.layers)
 
 
 def test_aggregate_open_exposure():
