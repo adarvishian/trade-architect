@@ -40,7 +40,7 @@ from trading_architect.store.database import (
     row_to_review_item,
 )
 
-AccountKind = Literal["schwab", "robinhood", "tradovate", "manual"]
+AccountKind = Literal["schwab", "robinhood", "tradovate", "manual", "cash_only"]
 SnapshotSource = Literal["api", "manual"]
 CashEventClassification = Literal["pending", "deposit", "withdrawal", "market_move"]
 
@@ -595,19 +595,26 @@ class Repository:
         silo: Silo,
         institution: str = "",
         include_in_deployable: bool = True,
+        preserve_deployable: bool = False,
     ) -> AccountRecord:
+        deployable_val = int(include_in_deployable)
+        deployable_sql = (
+            "include_in_deployable = accounts.include_in_deployable"
+            if preserve_deployable
+            else "include_in_deployable = excluded.include_in_deployable"
+        )
         with self.db.connect() as conn:
             conn.execute(
-                """
+                f"""
                 INSERT INTO accounts (kind, label, silo, institution, include_in_deployable)
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(label) DO UPDATE SET
                     kind = excluded.kind,
                     silo = excluded.silo,
                     institution = excluded.institution,
-                    include_in_deployable = excluded.include_in_deployable
+                    {deployable_sql}
                 """,
-                (kind, label, silo.value, institution, int(include_in_deployable)),
+                (kind, label, silo.value, institution, deployable_val),
             )
             row = conn.execute("SELECT * FROM accounts WHERE label = ?", (label,)).fetchone()
         return _row_to_account(row)
@@ -671,6 +678,16 @@ class Repository:
     ) -> int:
         as_of_iso = as_of.astimezone(timezone.utc).isoformat()
         if not rows:
+            with self.db.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO holdings_snapshots (
+                        account_id, as_of, symbol, occ_symbol, asset_type,
+                        qty, mark, mtm_value, cost_basis
+                    ) VALUES (?, ?, '', NULL, 'stock', 0, NULL, 0, 0)
+                    """,
+                    (account_id, as_of_iso),
+                )
             return 0
         with self.db.connect() as conn:
             conn.executemany(
@@ -857,7 +874,7 @@ class Repository:
                 INSERT INTO position_overrides (symbol, silo, initial_stop, current_stop, updated_at)
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, silo) DO UPDATE SET
-                    initial_stop = COALESCE(excluded.initial_stop, position_overrides.initial_stop),
+                    initial_stop = excluded.initial_stop,
                     current_stop = excluded.current_stop,
                     updated_at = excluded.updated_at
                 """,
@@ -922,6 +939,14 @@ class Repository:
             current_stop=row["current_stop"],
             updated_at=_parse_dt(row["updated_at"]),
         )
+
+    def delete_position_override(self, symbol: str, silo: Silo) -> bool:
+        with self.db.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM position_overrides WHERE symbol = ? AND silo = ?",
+                (symbol, silo.value),
+            )
+        return cursor.rowcount > 0
 
     def record_size_recommendation(
         self,
@@ -1170,7 +1195,12 @@ class Repository:
             resolved_at=_parse_dt(row["resolved_at"]),
         )
 
-    def net_cashflow_adjustment_for_silo(self, silo: Silo) -> float:
+    def net_cashflow_adjustment_for_silo(
+        self,
+        silo: Silo,
+        *,
+        as_of: datetime | None = None,
+    ) -> float:
         """Net deposits minus withdrawals (classified) for drawdown HWM adjustment."""
         accounts = {a.id for a in self.list_accounts(silo=silo)}
         if not accounts:
@@ -1179,19 +1209,76 @@ class Repository:
         with self.db.connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT classification, delta FROM cash_events
+                SELECT classification, delta, detected_at FROM cash_events
                 WHERE account_id IN ({placeholders})
                 AND classification IN ('deposit', 'withdrawal')
                 """,
                 list(accounts),
             ).fetchall()
         net = 0.0
+        as_of_cutoff = as_of.astimezone(timezone.utc) if as_of else None
         for row in rows:
+            if as_of_cutoff is not None:
+                detected = _parse_dt(row["detected_at"])
+                if detected > as_of_cutoff:
+                    continue
             if row["classification"] == "deposit":
                 net += row["delta"]
             elif row["classification"] == "withdrawal":
                 net -= abs(row["delta"])
         return net
+
+    def _equity_eligible_accounts(self, silo: Silo | None = None) -> list[AccountRecord]:
+        """Accounts that contribute to silo equity totals (excludes cash-only and orphan Schwab)."""
+        settings = self.load_app_settings()
+        mapped_schwab = set(settings.schwab_account_hashes.keys())
+        accounts = self.list_accounts(silo=silo)
+        eligible: list[AccountRecord] = []
+        for acct in accounts:
+            if acct.kind == "cash_only":
+                continue
+            if acct.kind == "schwab" and mapped_schwab and acct.label not in mapped_schwab:
+                continue
+            eligible.append(acct)
+        return eligible
+
+    def daily_equity_series(
+        self,
+        *,
+        silo: Silo | None = None,
+    ) -> list[tuple[date, float]]:
+        """End-of-day equity totals with per-account forward-fill."""
+        accounts = self._equity_eligible_accounts(silo=silo)
+        if not accounts:
+            return []
+
+        histories: dict[int, list[BalanceSnapshotRecord]] = {
+            acct.id: self.balance_history(acct.id) for acct in accounts
+        }
+        all_dates: set[date] = set()
+        for hist in histories.values():
+            for snap in hist:
+                all_dates.add(snap.as_of.date())
+        if not all_dates:
+            return []
+
+        sorted_dates = sorted(all_dates)
+        indices = {acct.id: 0 for acct in accounts}
+        last_vals: dict[int, float | None] = {acct.id: None for acct in accounts}
+        series: list[tuple[date, float]] = []
+
+        for d in sorted_dates:
+            for acct in accounts:
+                hist = histories[acct.id]
+                idx = indices[acct.id]
+                while idx < len(hist) and hist[idx].as_of.date() <= d:
+                    last_vals[acct.id] = hist[idx].equity_value
+                    idx += 1
+                indices[acct.id] = idx
+            active = [last_vals[a.id] for a in accounts if last_vals[a.id] is not None]
+            if active:
+                series.append((d, sum(active)))
+        return series
 
     def list_events_after(
         self,
@@ -1282,33 +1369,6 @@ class Repository:
 
     def has_benchmark_price_for_date(self, symbol: str, price_date: date) -> bool:
         return self.get_benchmark_price(symbol, price_date) is not None
-
-    def daily_equity_series(
-        self,
-        *,
-        silo: Silo | None = None,
-    ) -> list[tuple[date, float]]:
-        """End-of-day equity totals from balance snapshots (latest per account per day)."""
-        accounts = self.list_accounts(silo=silo)
-        if not accounts:
-            return []
-        account_ids = {a.id for a in accounts}
-        placeholders = ",".join("?" * len(account_ids))
-        with self.db.connect() as conn:
-            rows = conn.execute(
-                f"""
-                SELECT account_id, date(as_of) AS d, equity_value, as_of, id
-                FROM balance_snapshots
-                WHERE account_id IN ({placeholders})
-                ORDER BY d ASC, as_of ASC, id ASC
-                """,
-                list(account_ids),
-            ).fetchall()
-        by_day_account: dict[date, dict[int, float]] = {}
-        for row in rows:
-            d = date.fromisoformat(row["d"])
-            by_day_account.setdefault(d, {})[row["account_id"]] = row["equity_value"]
-        return [(d, sum(acct_vals.values())) for d, acct_vals in sorted(by_day_account.items())]
 
     def daily_cash_flows(self, *, silo: Silo | None = None) -> dict[date, float]:
         """Net external cash flow by date (deposits positive, withdrawals negative)."""
