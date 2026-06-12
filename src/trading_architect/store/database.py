@@ -17,6 +17,7 @@ from trading_architect.models.entities import (
     ReviewQueueItem,
     TradeEvent,
 )
+from trading_architect.store.backup import ensure_daily_backup
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS methodology_epochs (
@@ -120,6 +121,46 @@ CREATE INDEX IF NOT EXISTS idx_trade_events_silo ON trade_events(silo);
 CREATE INDEX IF NOT EXISTS idx_trade_events_timestamp ON trade_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_positions_silo ON positions(silo);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
+
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL UNIQUE,
+    silo TEXT NOT NULL,
+    institution TEXT DEFAULT '',
+    include_in_deployable INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS balance_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    as_of TEXT NOT NULL,
+    cash REAL NOT NULL DEFAULT 0,
+    equity_value REAL NOT NULL DEFAULT 0,
+    buying_power REAL NOT NULL DEFAULT 0,
+    source TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS holdings_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    as_of TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    occ_symbol TEXT,
+    asset_type TEXT NOT NULL,
+    qty REAL NOT NULL DEFAULT 0,
+    mark REAL,
+    mtm_value REAL NOT NULL DEFAULT 0,
+    cost_basis REAL NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_balance_snapshots_account ON balance_snapshots(account_id);
+CREATE INDEX IF NOT EXISTS idx_balance_snapshots_as_of ON balance_snapshots(as_of);
+CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_account ON holdings_snapshots(account_id);
+CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_as_of ON holdings_snapshots(as_of);
 """
 
 
@@ -144,9 +185,11 @@ class Database:
             conn.close()
 
     def initialize(self) -> None:
+        ensure_daily_backup(self.path)
         with self.connect() as conn:
             conn.executescript(SCHEMA)
             self._migrate_trade_events(conn)
+            self._migrate_accounts(conn)
             for epoch in DEFAULT_EPOCHS:
                 conn.execute(
                     """
@@ -162,6 +205,60 @@ class Database:
                         epoch.notes,
                     ),
                 )
+
+    def _migrate_accounts(self, conn: sqlite3.Connection) -> None:
+        """Additive migrations for account-first tables (Phase 1)."""
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "accounts" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    label TEXT NOT NULL UNIQUE,
+                    silo TEXT NOT NULL,
+                    institution TEXT DEFAULT '',
+                    include_in_deployable INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS balance_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL REFERENCES accounts(id),
+                    as_of TEXT NOT NULL,
+                    cash REAL NOT NULL DEFAULT 0,
+                    equity_value REAL NOT NULL DEFAULT 0,
+                    buying_power REAL NOT NULL DEFAULT 0,
+                    source TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS holdings_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL REFERENCES accounts(id),
+                    as_of TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    occ_symbol TEXT,
+                    asset_type TEXT NOT NULL,
+                    qty REAL NOT NULL DEFAULT 0,
+                    mark REAL,
+                    mtm_value REAL NOT NULL DEFAULT 0,
+                    cost_basis REAL NOT NULL DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_balance_snapshots_account
+                    ON balance_snapshots(account_id);
+                CREATE INDEX IF NOT EXISTS idx_balance_snapshots_as_of
+                    ON balance_snapshots(as_of);
+                CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_account
+                    ON holdings_snapshots(account_id);
+                CREATE INDEX IF NOT EXISTS idx_holdings_snapshots_as_of
+                    ON holdings_snapshots(as_of);
+                """
+            )
 
     def _migrate_trade_events(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(trade_events)")}

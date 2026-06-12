@@ -12,7 +12,7 @@ APP_FILE = APP_DIR / "streamlit_app.py"
 
 PAGES = [
     "Dashboard",
-    "Import Data",
+    "Accounts",
     "Size a Trade",
     "Option Selector",
     "Current Positions",

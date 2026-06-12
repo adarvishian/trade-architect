@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from trading_architect.config.user_settings import (
     AppSettings,
@@ -25,6 +27,7 @@ from trading_architect.models.entities import (
     MethodologyEpoch,
     Position,
     ReviewQueueItem,
+    Silo,
     TradeEvent,
 )
 from trading_architect.store.database import (
@@ -36,6 +39,66 @@ from trading_architect.store.database import (
     row_to_position,
     row_to_review_item,
 )
+
+AccountKind = Literal["schwab", "robinhood", "tradovate", "manual"]
+SnapshotSource = Literal["api", "manual"]
+
+
+@dataclass(frozen=True)
+class AccountRecord:
+    id: int
+    kind: AccountKind
+    label: str
+    silo: Silo
+    institution: str
+    include_in_deployable: bool
+    created_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class BalanceSnapshotRecord:
+    account_id: int
+    as_of: datetime
+    cash: float
+    equity_value: float
+    buying_power: float
+    source: SnapshotSource
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class HoldingSnapshotRecord:
+    account_id: int
+    as_of: datetime
+    symbol: str
+    asset_type: str
+    qty: float
+    mtm_value: float
+    cost_basis: float
+    occ_symbol: str | None = None
+    mark: float | None = None
+    id: int | None = None
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _row_to_account(row) -> AccountRecord:
+    return AccountRecord(
+        id=int(row["id"]),
+        kind=row["kind"],
+        label=row["label"],
+        silo=Silo(row["silo"]),
+        institution=row["institution"] or "",
+        include_in_deployable=bool(row["include_in_deployable"]),
+        created_at=_parse_dt(row["created_at"]),
+    )
 
 
 class Repository:
@@ -428,6 +491,244 @@ class Repository:
                 [(eid,) for eid in to_delete],
             )
         return len(to_delete)
+
+    def upsert_account(
+        self,
+        *,
+        kind: AccountKind,
+        label: str,
+        silo: Silo,
+        institution: str = "",
+        include_in_deployable: bool = True,
+    ) -> AccountRecord:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO accounts (kind, label, silo, institution, include_in_deployable)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(label) DO UPDATE SET
+                    kind = excluded.kind,
+                    silo = excluded.silo,
+                    institution = excluded.institution,
+                    include_in_deployable = excluded.include_in_deployable
+                """,
+                (kind, label, silo.value, institution, int(include_in_deployable)),
+            )
+            row = conn.execute("SELECT * FROM accounts WHERE label = ?", (label,)).fetchone()
+        return _row_to_account(row)
+
+    def list_accounts(self, *, silo: Silo | None = None) -> list[AccountRecord]:
+        query = "SELECT * FROM accounts WHERE 1=1"
+        params: list = []
+        if silo:
+            query += " AND silo = ?"
+            params.append(silo.value)
+        query += " ORDER BY label"
+        with self.db.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [_row_to_account(r) for r in rows]
+
+    def get_account_by_label(self, label: str) -> AccountRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT * FROM accounts WHERE label = ?", (label,)).fetchone()
+        return _row_to_account(row) if row else None
+
+    def delete_account(self, account_id: int) -> None:
+        with self.db.connect() as conn:
+            conn.execute("DELETE FROM holdings_snapshots WHERE account_id = ?", (account_id,))
+            conn.execute("DELETE FROM balance_snapshots WHERE account_id = ?", (account_id,))
+            conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+
+    def record_balance_snapshot(self, snapshot: BalanceSnapshotRecord) -> BalanceSnapshotRecord:
+        as_of = snapshot.as_of.astimezone(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO balance_snapshots (
+                    account_id, as_of, cash, equity_value, buying_power, source
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot.account_id,
+                    as_of,
+                    snapshot.cash,
+                    snapshot.equity_value,
+                    snapshot.buying_power,
+                    snapshot.source,
+                ),
+            )
+            row_id = cursor.lastrowid
+        return BalanceSnapshotRecord(
+            id=row_id,
+            account_id=snapshot.account_id,
+            as_of=snapshot.as_of,
+            cash=snapshot.cash,
+            equity_value=snapshot.equity_value,
+            buying_power=snapshot.buying_power,
+            source=snapshot.source,
+        )
+
+    def record_holdings_snapshots(
+        self,
+        account_id: int,
+        as_of: datetime,
+        rows: list[HoldingSnapshotRecord],
+    ) -> int:
+        as_of_iso = as_of.astimezone(timezone.utc).isoformat()
+        if not rows:
+            return 0
+        with self.db.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO holdings_snapshots (
+                    account_id, as_of, symbol, occ_symbol, asset_type,
+                    qty, mark, mtm_value, cost_basis
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        account_id,
+                        as_of_iso,
+                        row.symbol,
+                        row.occ_symbol,
+                        row.asset_type,
+                        row.qty,
+                        row.mark,
+                        row.mtm_value,
+                        row.cost_basis,
+                    )
+                    for row in rows
+                ],
+            )
+        return len(rows)
+
+    def latest_balance(self, account_id: int) -> BalanceSnapshotRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM balance_snapshots
+                WHERE account_id = ?
+                ORDER BY as_of DESC, id DESC
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return BalanceSnapshotRecord(
+            id=row["id"],
+            account_id=row["account_id"],
+            as_of=_parse_dt(row["as_of"]),
+            cash=row["cash"],
+            equity_value=row["equity_value"],
+            buying_power=row["buying_power"],
+            source=row["source"],
+        )
+
+    def latest_balances(self) -> dict[int, BalanceSnapshotRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT b.* FROM balance_snapshots b
+                INNER JOIN (
+                    SELECT account_id, MAX(as_of) AS max_as_of
+                    FROM balance_snapshots
+                    GROUP BY account_id
+                ) latest
+                ON b.account_id = latest.account_id AND b.as_of = latest.max_as_of
+                """
+            ).fetchall()
+        result: dict[int, BalanceSnapshotRecord] = {}
+        for row in rows:
+            snap = BalanceSnapshotRecord(
+                id=row["id"],
+                account_id=row["account_id"],
+                as_of=_parse_dt(row["as_of"]),
+                cash=row["cash"],
+                equity_value=row["equity_value"],
+                buying_power=row["buying_power"],
+                source=row["source"],
+            )
+            existing = result.get(snap.account_id)
+            if existing is None or (snap.id or 0) > (existing.id or 0):
+                result[snap.account_id] = snap
+        return result
+
+    def balance_history(self, account_id: int) -> list[BalanceSnapshotRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM balance_snapshots
+                WHERE account_id = ?
+                ORDER BY as_of ASC, id ASC
+                """,
+                (account_id,),
+            ).fetchall()
+        return [
+            BalanceSnapshotRecord(
+                id=row["id"],
+                account_id=row["account_id"],
+                as_of=_parse_dt(row["as_of"]),
+                cash=row["cash"],
+                equity_value=row["equity_value"],
+                buying_power=row["buying_power"],
+                source=row["source"],
+            )
+            for row in rows
+        ]
+
+    def latest_holdings(
+        self,
+        account_id: int | None = None,
+    ) -> list[HoldingSnapshotRecord]:
+        """Latest holdings batch per account (or all accounts when account_id is None)."""
+        with self.db.connect() as conn:
+            if account_id is not None:
+                latest = conn.execute(
+                    """
+                    SELECT MAX(as_of) AS max_as_of FROM holdings_snapshots
+                    WHERE account_id = ?
+                    """,
+                    (account_id,),
+                ).fetchone()
+                if not latest or not latest["max_as_of"]:
+                    return []
+                rows = conn.execute(
+                    """
+                    SELECT * FROM holdings_snapshots
+                    WHERE account_id = ? AND as_of = ?
+                    ORDER BY symbol
+                    """,
+                    (account_id, latest["max_as_of"]),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT h.* FROM holdings_snapshots h
+                    INNER JOIN (
+                        SELECT account_id, MAX(as_of) AS max_as_of
+                        FROM holdings_snapshots
+                        GROUP BY account_id
+                    ) latest
+                    ON h.account_id = latest.account_id AND h.as_of = latest.max_as_of
+                    ORDER BY h.account_id, h.symbol
+                    """
+                ).fetchall()
+        return [
+            HoldingSnapshotRecord(
+                id=row["id"],
+                account_id=row["account_id"],
+                as_of=_parse_dt(row["as_of"]),
+                symbol=row["symbol"],
+                occ_symbol=row["occ_symbol"],
+                asset_type=row["asset_type"],
+                qty=row["qty"],
+                mark=row["mark"],
+                mtm_value=row["mtm_value"],
+                cost_basis=row["cost_basis"],
+            )
+            for row in rows
+        ]
 
     def update_epoch(self, epoch: MethodologyEpoch) -> None:
         with self.db.connect() as conn:

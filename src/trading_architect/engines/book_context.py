@@ -81,6 +81,7 @@ def _silo_state(
     marks_provider: MarksProvider | None = None,
     *,
     live_equity: float | None = None,
+    live_peak_equity: float | None = None,
 ) -> SiloBookState:
     starting = settings.starting_equity()[silo]
     equity, peak = equity_metrics_for_silo(
@@ -91,6 +92,12 @@ def _silo_state(
         marks_provider=marks_provider,
         live_equity=live_equity,
     )
+    if live_peak_equity is not None:
+        peak = max(peak, live_peak_equity)
+    if live_equity is not None:
+        equity = live_equity
+        peak = max(peak, live_equity)
+
     dd_pct = compute_drawdown_pct(equity, peak)
     governor = assess_drawdown_state(dd_pct, settings.sizing)
     governor = DrawdownMetrics(
@@ -131,6 +138,9 @@ def build_book_context(
     marks_provider: MarksProvider | None = None,
     *,
     live_stock_options_equity: float | None = None,
+    live_futures_equity: float | None = None,
+    live_stock_options_peak: float | None = None,
+    live_futures_peak: float | None = None,
 ) -> BookContext:
     """Aggregate per-silo and account-level book state for dashboards and sizing."""
     marks_provider = marks_provider if marks_provider is not None else default_marks_provider()
@@ -141,8 +151,17 @@ def build_book_context(
         settings,
         marks_provider,
         live_equity=live_stock_options_equity,
+        live_peak_equity=live_stock_options_peak,
     )
-    fut = _silo_state(Silo.FUTURES, events, positions, settings, marks_provider)
+    fut = _silo_state(
+        Silo.FUTURES,
+        events,
+        positions,
+        settings,
+        marks_provider,
+        live_equity=live_futures_equity,
+        live_peak_equity=live_futures_peak,
+    )
 
     account_equity = stock.equity + fut.equity
     account_peak = account_equity_metrics(

@@ -105,11 +105,13 @@ def test_list_accounts_never_exposes_plain_account_numbers():
         assert "00001234" not in hash_val
 
 
-def test_build_book_context_uses_live_schwab_equity():
-    settings = AppSettings(
-        starting_equity_stock_options=100_000.0,
-        schwab_live_equity=125_000.5,
-        schwab_live_equity_at="2026-05-29T12:00:00+00:00",
+def test_build_book_context_uses_live_snapshot_equity():
+    settings = AppSettings(starting_equity_stock_options=100_000.0)
+    book = build_book_context(
+        [],
+        [],
+        settings,
+        live_stock_options_equity=125_000.5,
+        live_stock_options_peak=130_000.0,
     )
-    book = build_book_context([], [], settings, live_stock_options_equity=125_000.5)
     assert book.stock_options.equity == pytest.approx(125_000.5)

@@ -321,13 +321,14 @@ def fetch_holdings(
     return parse_holdings(payload, label=label)
 
 
-def fetch_portfolio_snapshot(
+def fetch_portfolio_snapshot_with_legs(
     labels: list[str] | None = None,
     client: SchwabSession | None = None,
     *,
     repo: Repository | None = None,
-) -> SchwabAccountSnapshot:
-    """Fetch balances and open holdings for one or more labeled Schwab accounts."""
+    persist: bool = True,
+) -> tuple[SchwabAccountSnapshot, list[HoldingLeg]]:
+    """Fetch balances and open holdings; optionally persist snapshots to the store."""
     client = client or get_client()
     if repo is not None:
         settings = repo.load_app_settings()
@@ -350,8 +351,40 @@ def fetch_portfolio_snapshot(
         balances.append(parse_account_balance(payload, label=label))
         all_legs.extend(parse_holdings(payload, label=label))
 
-    return SchwabAccountSnapshot(
+    snapshot = SchwabAccountSnapshot(
         fetched_at=datetime.now(timezone.utc),
         accounts=balances,
         holdings=consolidate_holdings(all_legs),
     )
+
+    if persist and repo is not None:
+        from trading_architect.models.entities import Silo
+        from trading_architect.services.snapshot_persist import persist_legs_snapshot
+
+        persist_legs_snapshot(
+            repo,
+            kind="schwab",
+            silo=Silo.STOCK_OPTIONS,
+            institution="Schwab",
+            fetched_at=snapshot.fetched_at,
+            accounts=balances,
+            legs=all_legs,
+        )
+
+    return snapshot, all_legs
+
+
+def fetch_portfolio_snapshot(
+    labels: list[str] | None = None,
+    client: SchwabSession | None = None,
+    *,
+    repo: Repository | None = None,
+) -> SchwabAccountSnapshot:
+    """Fetch balances and open holdings for one or more labeled Schwab accounts."""
+    snapshot, _legs = fetch_portfolio_snapshot_with_legs(
+        labels,
+        client=client,
+        repo=repo,
+        persist=repo is not None,
+    )
+    return snapshot

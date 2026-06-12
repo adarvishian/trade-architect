@@ -35,6 +35,8 @@ from trading_architect.models.entities import (
     TradeEvent,
 )
 
+_rh_session_active = False
+
 
 def _require_robin_stocks():
     try:
@@ -63,8 +65,10 @@ def login_from_env() -> None:
 
 def login(username: str, password: str, mfa_code: str | None = None) -> None:
     """Authenticate with explicit credentials (session-only; never persisted)."""
+    global _rh_session_active
     rh = _require_robin_stocks()
     rh.login(username, password, mfa_code=mfa_code or None)
+    _rh_session_active = True
 
 
 def robin_stocks_available() -> bool:
@@ -291,18 +295,27 @@ def consolidate_holdings(legs: list[HoldingLeg]) -> list[ConsolidatedHolding]:
     )
 
 
-def fetch_portfolio_snapshot(
+def rh_session_active() -> bool:
+    """True when Robinhood login succeeded in this process (session-only)."""
+    return _rh_session_active
+
+
+def fetch_portfolio_snapshot_with_legs(
     accounts: list[str] | None = None,
     *,
     username: str | None = None,
     password: str | None = None,
     mfa_code: str | None = None,
-) -> RobinhoodPortfolioSnapshot:
-    """Fetch balances and open holdings for Robinhood Roth + individual (and IRA if linked)."""
+    repo=None,
+    persist: bool = True,
+) -> tuple[RobinhoodPortfolioSnapshot, list[HoldingLeg]]:
+    """Fetch balances and open holdings; optionally persist snapshots to the store."""
+    global _rh_session_active
     if username and password:
         login(username, password, mfa_code=mfa_code)
     else:
         login_from_env()
+    _rh_session_active = True
 
     linked = list_robinhood_accounts()
     if accounts:
@@ -316,11 +329,46 @@ def fetch_portfolio_snapshot(
         all_legs.extend(fetch_stock_holdings(label, account_number=number))
         all_legs.extend(fetch_option_holdings(label, account_number=number))
 
-    return RobinhoodPortfolioSnapshot(
+    snapshot = RobinhoodPortfolioSnapshot(
         fetched_at=datetime.now(timezone.utc),
         accounts=balances,
         holdings=consolidate_holdings(all_legs),
     )
+
+    if persist and repo is not None:
+        from trading_architect.services.snapshot_persist import persist_legs_snapshot
+
+        persist_legs_snapshot(
+            repo,
+            kind="robinhood",
+            silo=Silo.STOCK_OPTIONS,
+            institution="Robinhood",
+            fetched_at=snapshot.fetched_at,
+            accounts=balances,
+            legs=all_legs,
+        )
+
+    return snapshot, all_legs
+
+
+def fetch_portfolio_snapshot(
+    accounts: list[str] | None = None,
+    *,
+    username: str | None = None,
+    password: str | None = None,
+    mfa_code: str | None = None,
+    repo=None,
+) -> RobinhoodPortfolioSnapshot:
+    """Fetch balances and open holdings for Robinhood Roth + individual (and IRA if linked)."""
+    snapshot, _legs = fetch_portfolio_snapshot_with_legs(
+        accounts,
+        username=username,
+        password=password,
+        mfa_code=mfa_code,
+        repo=repo,
+        persist=repo is not None,
+    )
+    return snapshot
 
 
 def format_account_breakdown(by_account: dict[str, float]) -> str:

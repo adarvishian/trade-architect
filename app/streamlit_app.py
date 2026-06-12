@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +13,7 @@ from ui_helpers import (
     cap_status_pct,
     render_app_header,
     render_governor_sidebar,
+    render_ops_banner,
     show_ui_error,
     silo_book_row,
 )
@@ -25,7 +26,6 @@ from trading_architect.bootstrap import (
     import_and_assemble,
     import_robinhood_fetch,
     import_schwab_fetch,
-    sync_schwab_live_equity,
 )
 from trading_architect.config.env import (
     load_env,
@@ -42,18 +42,22 @@ from trading_architect.ingestion.robinhood_fetch import (
     fetch_portfolio_snapshot,
     format_holding_label,
     holding_breakdown,
+    rh_session_active,
     robin_stocks_available,
     stock_account_breakdown,
 )
 from trading_architect.ingestion.schwab_accounts import list_accounts
 from trading_architect.ingestion.schwab_auth import schwab_connection_status, schwab_py_available
 from trading_architect.models.entities import Silo
+from trading_architect.services.current_state import account_cards, current_positions
+from trading_architect.services.snapshot_persist import persist_manual_balance
+from trading_architect.services.sync import sync_all
 
 load_env()
 
 PAGES = [
     "Dashboard",
-    "Import Data",
+    "Accounts",
     "Size a Trade",
     "Option Selector",
     "Current Positions",
@@ -69,14 +73,35 @@ def get_repository():
     return create_repository()
 
 
+def maybe_run_sync(repo) -> None:
+    """Auto-sync broker snapshots on open and when TTL expires."""
+    if "app_settings" not in st.session_state:
+        st.session_state.app_settings = repo.load_app_settings()
+    settings: AppSettings = st.session_state.app_settings
+    ttl = timedelta(minutes=settings.refresh_interval_min)
+    now = datetime.now(timezone.utc)
+    last = st.session_state.get("last_sync_at")
+    force = st.session_state.pop("force_sync", False)
+    if force or last is None or (now - last) > ttl:
+        results = sync_all(
+            repo,
+            settings=settings,
+            rh_session_active=rh_session_active,
+            force=force,
+        )
+        st.session_state.sync_results = results
+        st.session_state.last_sync_at = now
+
+
 def load_session_data():
     repo = get_repository()
+    maybe_run_sync(repo)
     if "app_settings" not in st.session_state:
         st.session_state.app_settings = repo.load_app_settings()
     settings: AppSettings = st.session_state.app_settings
     events = repo.list_events()
     positions = repo.list_positions()
-    book = build_app_book_context(events, positions, settings)
+    book = build_app_book_context(events, positions, settings, repo=repo)
     return repo, settings, events, positions, book
 
 
@@ -98,11 +123,12 @@ page = st.sidebar.radio("Navigate", PAGES, index=0)
 render_governor_sidebar(book)
 
 render_app_header()
+render_ops_banner(st.session_state.get("sync_results"))
 
 if page == "Dashboard":
     st.header("Dashboard")
     if not events:
-        st.info("Import broker CSVs to populate your books. Start under **Import Data**.")
+        st.info("Link accounts under **Accounts** or import history for evaluation.")
     else:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Trade events", repo.event_count())
@@ -151,377 +177,432 @@ if page == "Dashboard":
             st.subheader("Recent imports")
             st.dataframe(pd.DataFrame(imports), use_container_width=True, hide_index=True)
 
-elif page == "Import Data":
-    st.header("Import Data")
-    csv_tab, roth_tab, schwab_tab = st.tabs(
-        ["CSV upload", "Robinhood API (Roth IRA)", "Schwab API"]
-    )
+elif page == "Accounts":
+    st.header("Accounts")
+    st.caption("Linked accounts auto-sync on open; manual accounts for banks and Tradovate cash.")
 
-    with csv_tab:
-        st.write("Drop CSV exports from Robinhood, Schwab/thinkorswim, or Tradovate.")
-        broker = st.selectbox("Broker", ["robinhood", "schwab", "tradovate"], key="csv_broker")
-        account = st.text_input(
-            "Account label",
-            "",
-            key="csv_account",
-            help="e.g. robinhood-individual, schwab-tos, tradovate",
+    sync_results = {r.account_label: r for r in st.session_state.get("sync_results", [])}
+    cards = account_cards(repo)
+
+    if st.button("Sync now", type="primary", key="accounts_sync_now"):
+        st.session_state.force_sync = True
+        get_repository.clear()
+        st.rerun()
+
+    if cards:
+        for card in cards:
+            sync = sync_results.get(card["label"])
+            status = sync.status if sync else "ok"
+            as_of = card["as_of"]
+            as_of_text = as_of.strftime("%Y-%m-%d %H:%M UTC") if as_of else "—"
+            icon = {"ok": "🟢", "stale": "🟡", "auth_required": "🔴", "error": "🔴"}.get(status, "⚪")
+            cols = st.columns([2, 1, 1, 1, 1])
+            cols[0].markdown(f"**{card['label']}** ({card['institution'] or card['kind']})")
+            cols[1].metric("Value", f"${card['equity_value']:,.0f}" if card["equity_value"] else "—")
+            cols[2].metric("Cash", f"${card['cash']:,.0f}" if card["cash"] is not None else "—")
+            cols[3].caption(f"As of {as_of_text}")
+            cols[4].caption(f"{icon} {status}")
+    else:
+        st.info("No accounts yet. Add a manual account below or connect Schwab/Robinhood.")
+
+    st.divider()
+    st.subheader("Manual accounts")
+    with st.form("manual_account_form"):
+        m_label = st.text_input("Label", placeholder="bank-checking")
+        m_institution = st.text_input("Institution", placeholder="Chase")
+        m_silo = st.selectbox("Silo", ["stock_options", "futures"])
+        m_deployable = st.checkbox("Include in deployable capital", value=True)
+        m_submitted = st.form_submit_button("Add account")
+    if m_submitted and m_label:
+        repo.upsert_account(
+            kind="manual",
+            label=m_label.strip(),
+            silo=Silo(m_silo),
+            institution=m_institution.strip(),
+            include_in_deployable=m_deployable,
         )
-        uploaded = st.file_uploader("CSV file", type=["csv"], key="csv_upload")
+        st.success(f"Added account **{m_label}**")
+        st.rerun()
 
-        if uploaded and st.button("Import CSV", type="primary", key="csv_import_btn"):
-            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                tmp.write(uploaded.getvalue())
-                tmp_path = Path(tmp.name)
-
-            try:
-                result = import_and_assemble(
-                    tmp_path, broker=broker, account=account or None, repo=repo
+    manual_accounts = [a for a in repo.list_accounts() if a.kind == "manual"]
+    if manual_accounts:
+        pick = st.selectbox(
+            "Update balance",
+            [a.label for a in manual_accounts],
+            key="manual_balance_account",
+        )
+        with st.form("manual_balance_form"):
+            m_amount = st.number_input("Equity / balance ($)", min_value=0.0, step=100.0)
+            m_as_of = st.date_input("As-of date", value=date.today())
+            m_bal_submit = st.form_submit_button("Save balance")
+        if m_bal_submit and pick:
+            acct = repo.get_account_by_label(pick)
+            if acct:
+                persist_manual_balance(
+                    repo,
+                    label=pick,
+                    silo=acct.silo,
+                    institution=acct.institution,
+                    equity_value=m_amount,
+                    as_of=datetime.combine(m_as_of, datetime.min.time(), tzinfo=timezone.utc),
                 )
-            finally:
-                tmp_path.unlink(missing_ok=True)
-
-            get_repository.clear()
-            st.success(
-                f"Imported **{result.imported}** events "
-                f"({result.skipped_duplicates} duplicates skipped, "
-                f"{result.review_queue} sent to review queue)."
-            )
-            st.metric("Positions assembled", repo.position_count())
-
-            if broker == "tradovate":
-                from trading_architect.engines.trade_stats import (
-                    format_duration,
-                    summarize_closed_positions,
-                )
-                from trading_architect.models.entities import Silo
-
-                positions = repo.list_positions()
-                stats = summarize_closed_positions(positions, silo=Silo.FUTURES)
-                if stats:
-                    st.subheader("Futures performance summary")
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Gross P/L", f"${stats.gross_pnl:,.2f}")
-                    c2.metric("Trades", stats.trade_count)
-                    c3.metric("% Profitable", f"{stats.win_rate:.2%}")
-                    c4.metric("Expectancy", f"${stats.expectancy:,.2f}")
-                    st.caption(
-                        f"Wins: {stats.win_count} (${stats.total_profit:,.2f}) · "
-                        f"Losses: {stats.loss_count} (${stats.total_loss:,.2f}) · "
-                        f"Avg time: {format_duration(stats.avg_trade_duration)} · "
-                        f"Longest: {format_duration(stats.longest_trade_duration)}"
-                    )
-
-            st.rerun()
-
-    with roth_tab:
-        st.write(
-            "Robinhood Roth IRA has no in-app CSV export. "
-            "Pull fills directly from Robinhood's API and import into the store."
-        )
-
-        if not robin_stocks_available():
-            st.warning(
-                "Install the optional dependency first: "
-                '`pip install robin-stocks` or `pip install -e ".[robinhood]"`'
-            )
-        else:
-            st.success("robin-stocks is installed.")
-
-        env_user = os.environ.get("RH_USERNAME", "")
-        using_env = rh_credentials_configured()
-
-        if using_env:
-            st.info(f"Using credentials from environment (RH_USERNAME={env_user}).")
-        else:
-            st.caption("Credentials are used for this session only — never stored in the database.")
-
-        username = st.text_input(
-            "Robinhood email",
-            value=env_user,
-            disabled=using_env,
-            key="rh_username",
-        )
-        password = st.text_input(
-            "Robinhood password",
-            type="password",
-            value="" if not using_env else "********",
-            disabled=using_env,
-            key="rh_password",
-        )
-        mfa_code = st.text_input(
-            "2FA code (if prompted)",
-            help="Enter only when Robinhood requires MFA for this login.",
-            key="rh_mfa",
-        )
-
-        with st.form("robinhood_fetch_form"):
-            rh_account = st.selectbox(
-                "Account",
-                ["robinhood-roth", "robinhood-ira", "robinhood-individual"],
-                help="Maps to your Robinhood account type after login.",
-            )
-            save_audit_csv = st.checkbox("Save audit CSV to data/raw/", value=True)
-            submitted = st.form_submit_button("Fetch & Import", type="primary")
-
-        if submitted:
-            if not robin_stocks_available():
-                st.error("Install robin-stocks before fetching.")
-            elif not using_env and (not username or not password):
-                st.error(
-                    "Enter Robinhood credentials or set RH_USERNAME / RH_PASSWORD in your environment."
-                )
-            else:
-                with st.spinner(f"Logging in and fetching {rh_account}..."):
-                    try:
-                        result = import_robinhood_fetch(
-                            account=rh_account,
-                            username=None if using_env else username,
-                            password=None if using_env else password,
-                            mfa_code=mfa_code or None,
-                            save_csv=save_audit_csv,
-                            repo=repo,
-                        )
-                        get_repository.clear()
-                        st.success(
-                            f"Imported **{result.imported}** events from Robinhood API "
-                            f"({result.skipped_duplicates} duplicates skipped)."
-                        )
-                        if save_audit_csv:
-                            st.caption("Audit CSV saved under `data/raw/`.")
-                        st.metric("Positions assembled", repo.position_count())
-                        st.rerun()
-                    except ImportError:
-                        st.error("robin-stocks is not installed.")
-                    except Exception as exc:
-                        show_ui_error(exc, context="Robinhood fetch & import")
-
-        st.divider()
-        st.subheader("Portfolio snapshot")
-        st.caption(
-            "Pull cash/cash-equivalent balances and open holdings from Roth + individual accounts. "
-            "Cash totals feed starting-equity sizing; holdings show sum-of-parts by account."
-        )
-
-        with st.form("robinhood_portfolio_form"):
-            portfolio_accounts = st.multiselect(
-                "Accounts to include",
-                ["robinhood-roth", "robinhood-individual", "robinhood-ira"],
-                default=["robinhood-roth", "robinhood-individual"],
-            )
-            portfolio_submitted = st.form_submit_button(
-                "Fetch balances & holdings", type="secondary"
-            )
-
-        if portfolio_submitted:
-            if not robin_stocks_available():
-                st.error("Install robin-stocks before fetching.")
-            elif not using_env and (not username or not password):
-                st.error("Enter Robinhood credentials or set RH_USERNAME / RH_PASSWORD.")
-            else:
-                with st.spinner("Fetching Robinhood portfolio..."):
-                    try:
-                        snapshot = fetch_portfolio_snapshot(
-                            accounts=portfolio_accounts or None,
-                            username=None if using_env else username,
-                            password=None if using_env else password,
-                            mfa_code=mfa_code or None,
-                        )
-                        st.session_state["rh_portfolio_snapshot"] = snapshot
-                    except Exception as exc:
-                        show_ui_error(exc, context="Robinhood portfolio fetch")
-
-        snapshot = st.session_state.get("rh_portfolio_snapshot")
-        if snapshot:
-            bal_rows = [
-                {
-                    "account": b.account.replace("robinhood-", ""),
-                    "cash": b.cash,
-                    "cash_equivalents": b.cash_equivalents,
-                    "cash_and_equivalents": b.cash_and_equivalents,
-                    "portfolio_equity": b.portfolio_equity,
-                    "buying_power": b.buying_power,
-                }
-                for b in snapshot.accounts
-            ]
-            st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
-            c1, c2 = st.columns(2)
-            c1.metric("Total cash & equivalents", f"${snapshot.total_cash_and_equivalents:,.2f}")
-            c2.metric("Total portfolio equity", f"${snapshot.total_portfolio_equity:,.2f}")
-
-            if snapshot.holdings:
-                hold_rows = []
-                for h in snapshot.holdings:
-                    hold_rows.append(
-                        {
-                            "position": format_holding_label(h),
-                            "type": h.asset_type.value,
-                            "qty": h.total_quantity,
-                            "avg_cost": h.average_cost,
-                            "market_value": h.market_value or None,
-                            "by_account": holding_breakdown(h),
-                        }
-                    )
-                st.dataframe(pd.DataFrame(hold_rows), use_container_width=True, hide_index=True)
-
-            if st.button("Use total portfolio equity as stock/options starting equity"):
-                settings.starting_equity_stock_options = snapshot.total_portfolio_equity
-                repo.save_app_settings(settings)
-                st.session_state.app_settings = settings
-                st.success(
-                    f"Starting equity (stock/options) set to ${snapshot.total_portfolio_equity:,.2f}"
-                )
-
-    with schwab_tab:
-        st.write(
-            "Schwab/thinkorswim via the Trader API: portfolio snapshot (MTM equity) and trade import. "
-            "One-time OAuth: `ta fetch-schwab --login`."
-        )
-        schwab_status = schwab_connection_status()
-        if not schwab_status["installed"]:
-            st.warning('Install schwab-py: `pip install -e ".[schwab]"`')
-        elif not schwab_status["configured"]:
-            st.warning("Set SCHWAB_API_KEY and SCHWAB_APP_SECRET in .env")
-        elif not schwab_status["token"]:
-            st.warning(str(schwab_status["message"]))
-        else:
-            st.success(str(schwab_status["message"]))
-            if schwab_status.get("days_left") is not None:
-                st.caption(f"Refresh token: {schwab_status['days_left']} day(s) remaining")
-
-        st.divider()
-        st.subheader("Portfolio snapshot")
-        st.caption(
-            "Balances and open positions from Schwab REST. "
-            "MTM equity uses currentBalances.liquidationValue for the drawdown governor."
-        )
-        mapped_labels = sorted(settings.schwab_account_hashes.keys())
-        with st.form("schwab_portfolio_form"):
-            schwab_portfolio_labels = st.multiselect(
-                "Accounts to include",
-                mapped_labels or ["schwab-tos"],
-                default=mapped_labels or ["schwab-tos"],
-            )
-            portfolio_submitted = st.form_submit_button(
-                "Fetch balances & holdings",
-                type="secondary",
-            )
-
-        if portfolio_submitted:
-            if not schwab_py_available():
-                st.error("Install schwab-py before fetching.")
-            elif not schwab_credentials_configured() or not schwab_status["token"]:
-                st.error("Configure Schwab credentials and complete OAuth login first.")
-            else:
-                with st.spinner("Fetching Schwab portfolio..."):
-                    try:
-                        from trading_architect.ingestion.schwab_auth import SchwabAuthExpired
-
-                        snapshot = fetch_schwab_portfolio_snapshot(
-                            labels=schwab_portfolio_labels or None,
-                            repo=repo,
-                        )
-                        st.session_state["schwab_portfolio_snapshot"] = snapshot
-                        st.session_state.app_settings = repo.load_app_settings()
-                        settings = st.session_state.app_settings
-                    except SchwabAuthExpired as exc:
-                        st.error(str(exc))
-                    except Exception as exc:
-                        show_ui_error(exc, context="Schwab portfolio fetch")
-
-        schwab_snapshot = st.session_state.get("schwab_portfolio_snapshot")
-        if schwab_snapshot:
-            bal_rows = [
-                {
-                    "account": b.account,
-                    "cash": b.cash,
-                    "cash_equivalents": b.cash_equivalents,
-                    "cash_and_equivalents": b.cash_and_equivalents,
-                    "portfolio_equity": b.portfolio_equity,
-                    "buying_power": b.buying_power,
-                }
-                for b in schwab_snapshot.accounts
-            ]
-            st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
-            c1, c2 = st.columns(2)
-            c1.metric(
-                "Total cash & equivalents", f"${schwab_snapshot.total_cash_and_equivalents:,.2f}"
-            )
-            c2.metric("Total MTM equity", f"${schwab_snapshot.total_portfolio_equity:,.2f}")
-            if settings.schwab_live_equity_at:
-                st.caption(
-                    f"Governor using live equity (cached {settings.schwab_live_equity_at[:19]} UTC)"
-                )
-
-            if schwab_snapshot.holdings:
-                hold_rows = []
-                for h in schwab_snapshot.holdings:
-                    hold_rows.append(
-                        {
-                            "position": format_holding_label(h),
-                            "type": h.asset_type.value,
-                            "qty": h.total_quantity,
-                            "avg_cost": h.average_cost,
-                            "market_value": h.market_value or None,
-                            "by_account": holding_breakdown(h),
-                        }
-                    )
-                st.dataframe(pd.DataFrame(hold_rows), use_container_width=True, hide_index=True)
-
-            if st.button(
-                "Use total MTM equity as stock/options starting equity", key="schwab_use_equity"
-            ):
-                settings.starting_equity_stock_options = schwab_snapshot.total_portfolio_equity
-                sync_schwab_live_equity(repo, schwab_snapshot)
-                repo.save_app_settings(settings)
-                st.session_state.app_settings = settings
-                st.success(
-                    f"Starting equity set to ${schwab_snapshot.total_portfolio_equity:,.2f}; "
-                    "drawdown governor will use live liquidationValue."
-                )
+                st.session_state.force_sync = False
+                st.success(f"Balance updated for **{pick}**")
                 st.rerun()
 
-        st.divider()
-        st.subheader("Transaction import")
-        with st.form("schwab_fetch_form"):
-            schwab_account = st.text_input("Account label or hash", value="schwab-tos")
-            col_start, col_end = st.columns(2)
-            with col_start:
-                fetch_start = st.date_input("Start date", value=None, key="schwab_start")
-            with col_end:
-                fetch_end = st.date_input("End date", value=None, key="schwab_end")
-            save_audit = st.checkbox("Save audit CSV to data/raw/", value=True)
-            schwab_submitted = st.form_submit_button("Fetch & Import", type="primary")
+    with st.expander("Backfill history (for evaluation)"):
+        csv_tab, roth_tab, schwab_tab = st.tabs(
+            ["CSV upload", "Robinhood API (Roth IRA)", "Schwab API"]
+        )
 
-        if schwab_submitted:
-            if not schwab_py_available():
-                st.error("Install schwab-py before fetching.")
-            elif not schwab_credentials_configured() or not schwab_status["token"]:
-                st.error("Configure Schwab credentials and complete OAuth login first.")
+        with csv_tab:
+            st.write("Drop CSV exports from Robinhood, Schwab/thinkorswim, or Tradovate.")
+            broker = st.selectbox("Broker", ["robinhood", "schwab", "tradovate"], key="csv_broker")
+            account = st.text_input(
+                "Account label",
+                "",
+                key="csv_account",
+                help="e.g. robinhood-individual, schwab-tos, tradovate",
+            )
+            uploaded = st.file_uploader("CSV file", type=["csv"], key="csv_upload")
+
+            if uploaded and st.button("Import CSV", type="primary", key="csv_import_btn"):
+                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                    tmp.write(uploaded.getvalue())
+                    tmp_path = Path(tmp.name)
+
+                try:
+                    result = import_and_assemble(
+                        tmp_path, broker=broker, account=account or None, repo=repo
+                    )
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+
+                get_repository.clear()
+                st.success(
+                    f"Imported **{result.imported}** events "
+                    f"({result.skipped_duplicates} duplicates skipped, "
+                    f"{result.review_queue} sent to review queue)."
+                )
+                st.metric("Positions assembled", repo.position_count())
+
+                if broker == "tradovate":
+                    from trading_architect.engines.trade_stats import (
+                        format_duration,
+                        summarize_closed_positions,
+                    )
+                    from trading_architect.models.entities import Silo
+
+                    positions = repo.list_positions()
+                    stats = summarize_closed_positions(positions, silo=Silo.FUTURES)
+                    if stats:
+                        st.subheader("Futures performance summary")
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Gross P/L", f"${stats.gross_pnl:,.2f}")
+                        c2.metric("Trades", stats.trade_count)
+                        c3.metric("% Profitable", f"{stats.win_rate:.2%}")
+                        c4.metric("Expectancy", f"${stats.expectancy:,.2f}")
+                        st.caption(
+                            f"Wins: {stats.win_count} (${stats.total_profit:,.2f}) · "
+                            f"Losses: {stats.loss_count} (${stats.total_loss:,.2f}) · "
+                            f"Avg time: {format_duration(stats.avg_trade_duration)} · "
+                            f"Longest: {format_duration(stats.longest_trade_duration)}"
+                        )
+
+                st.rerun()
+
+        with roth_tab:
+            st.write(
+                "Robinhood Roth IRA has no in-app CSV export. "
+                "Pull fills directly from Robinhood's API and import into the store."
+            )
+
+            if not robin_stocks_available():
+                st.warning(
+                    "Install the optional dependency first: "
+                    '`pip install robin-stocks` or `pip install -e ".[robinhood]"`'
+                )
             else:
-                with st.spinner(f"Fetching {schwab_account}..."):
-                    try:
-                        result = import_schwab_fetch(
-                            account=schwab_account,
-                            start=fetch_start,
-                            end=fetch_end,
-                            save_csv=save_audit,
-                            repo=repo,
-                        )
-                        get_repository.clear()
-                        st.success(
-                            f"Imported **{result.imported}** events from Schwab API "
-                            f"({result.skipped_duplicates} duplicates skipped, "
-                            f"{result.review_queue} review-queue items)."
-                        )
-                        st.metric("Positions assembled", repo.position_count())
-                        st.rerun()
-                    except Exception as exc:
-                        from trading_architect.ingestion.schwab_auth import SchwabAuthExpired
+                st.success("robin-stocks is installed.")
 
-                        if isinstance(exc, SchwabAuthExpired):
+            env_user = os.environ.get("RH_USERNAME", "")
+            using_env = rh_credentials_configured()
+
+            if using_env:
+                st.info(f"Using credentials from environment (RH_USERNAME={env_user}).")
+            else:
+                st.caption("Credentials are used for this session only — never stored in the database.")
+
+            username = st.text_input(
+                "Robinhood email",
+                value=env_user,
+                disabled=using_env,
+                key="rh_username",
+            )
+            password = st.text_input(
+                "Robinhood password",
+                type="password",
+                value="" if not using_env else "********",
+                disabled=using_env,
+                key="rh_password",
+            )
+            mfa_code = st.text_input(
+                "2FA code (if prompted)",
+                help="Enter only when Robinhood requires MFA for this login.",
+                key="rh_mfa",
+            )
+
+            with st.form("robinhood_fetch_form"):
+                rh_account = st.selectbox(
+                    "Account",
+                    ["robinhood-roth", "robinhood-ira", "robinhood-individual"],
+                    help="Maps to your Robinhood account type after login.",
+                )
+                save_audit_csv = st.checkbox("Save audit CSV to data/raw/", value=True)
+                submitted = st.form_submit_button("Fetch & Import", type="primary")
+
+            if submitted:
+                if not robin_stocks_available():
+                    st.error("Install robin-stocks before fetching.")
+                elif not using_env and (not username or not password):
+                    st.error(
+                        "Enter Robinhood credentials or set RH_USERNAME / RH_PASSWORD in your environment."
+                    )
+                else:
+                    with st.spinner(f"Logging in and fetching {rh_account}..."):
+                        try:
+                            result = import_robinhood_fetch(
+                                account=rh_account,
+                                username=None if using_env else username,
+                                password=None if using_env else password,
+                                mfa_code=mfa_code or None,
+                                save_csv=save_audit_csv,
+                                repo=repo,
+                            )
+                            get_repository.clear()
+                            st.success(
+                                f"Imported **{result.imported}** events from Robinhood API "
+                                f"({result.skipped_duplicates} duplicates skipped)."
+                            )
+                            if save_audit_csv:
+                                st.caption("Audit CSV saved under `data/raw/`.")
+                            st.metric("Positions assembled", repo.position_count())
+                            st.rerun()
+                        except ImportError:
+                            st.error("robin-stocks is not installed.")
+                        except Exception as exc:
+                            show_ui_error(exc, context="Robinhood fetch & import")
+
+            st.divider()
+            st.subheader("Portfolio snapshot")
+            st.caption(
+                "Pull cash/cash-equivalent balances and open holdings from Roth + individual accounts. "
+                "Cash totals feed starting-equity sizing; holdings show sum-of-parts by account."
+            )
+
+            with st.form("robinhood_portfolio_form"):
+                portfolio_accounts = st.multiselect(
+                    "Accounts to include",
+                    ["robinhood-roth", "robinhood-individual", "robinhood-ira"],
+                    default=["robinhood-roth", "robinhood-individual"],
+                )
+                portfolio_submitted = st.form_submit_button(
+                    "Fetch balances & holdings", type="secondary"
+                )
+
+            if portfolio_submitted:
+                if not robin_stocks_available():
+                    st.error("Install robin-stocks before fetching.")
+                elif not using_env and (not username or not password):
+                    st.error("Enter Robinhood credentials or set RH_USERNAME / RH_PASSWORD.")
+                else:
+                    with st.spinner("Fetching Robinhood portfolio..."):
+                        try:
+                            snapshot = fetch_portfolio_snapshot(
+                                accounts=portfolio_accounts or None,
+                                username=None if using_env else username,
+                                password=None if using_env else password,
+                                mfa_code=mfa_code or None,
+                                repo=repo,
+                            )
+                            st.session_state["rh_portfolio_snapshot"] = snapshot
+                        except Exception as exc:
+                            show_ui_error(exc, context="Robinhood portfolio fetch")
+
+            snapshot = st.session_state.get("rh_portfolio_snapshot")
+            if snapshot:
+                bal_rows = [
+                    {
+                        "account": b.account.replace("robinhood-", ""),
+                        "cash": b.cash,
+                        "cash_equivalents": b.cash_equivalents,
+                        "cash_and_equivalents": b.cash_and_equivalents,
+                        "portfolio_equity": b.portfolio_equity,
+                        "buying_power": b.buying_power,
+                    }
+                    for b in snapshot.accounts
+                ]
+                st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
+                c1, c2 = st.columns(2)
+                c1.metric("Total cash & equivalents", f"${snapshot.total_cash_and_equivalents:,.2f}")
+                c2.metric("Total portfolio equity", f"${snapshot.total_portfolio_equity:,.2f}")
+
+                if snapshot.holdings:
+                    hold_rows = []
+                    for h in snapshot.holdings:
+                        hold_rows.append(
+                            {
+                                "position": format_holding_label(h),
+                                "type": h.asset_type.value,
+                                "qty": h.total_quantity,
+                                "avg_cost": h.average_cost,
+                                "market_value": h.market_value or None,
+                                "by_account": holding_breakdown(h),
+                            }
+                        )
+                    st.dataframe(pd.DataFrame(hold_rows), use_container_width=True, hide_index=True)
+
+                if st.button("Use total portfolio equity as stock/options starting equity"):
+                    settings.starting_equity_stock_options = snapshot.total_portfolio_equity
+                    repo.save_app_settings(settings)
+                    st.session_state.app_settings = settings
+                    st.success(
+                        f"Starting equity (stock/options) set to ${snapshot.total_portfolio_equity:,.2f}"
+                    )
+
+        with schwab_tab:
+            st.write(
+                "Schwab/thinkorswim via the Trader API: portfolio snapshot (MTM equity) and trade import. "
+                "One-time OAuth: `ta fetch-schwab --login`."
+            )
+            schwab_status = schwab_connection_status()
+            if not schwab_status["installed"]:
+                st.warning('Install schwab-py: `pip install -e ".[schwab]"`')
+            elif not schwab_status["configured"]:
+                st.warning("Set SCHWAB_API_KEY and SCHWAB_APP_SECRET in .env")
+            elif not schwab_status["token"]:
+                st.warning(str(schwab_status["message"]))
+            else:
+                st.success(str(schwab_status["message"]))
+                if schwab_status.get("days_left") is not None:
+                    st.caption(f"Refresh token: {schwab_status['days_left']} day(s) remaining")
+
+            st.divider()
+            st.subheader("Portfolio snapshot")
+            st.caption(
+                "Balances and open positions from Schwab REST. "
+                "MTM equity uses currentBalances.liquidationValue for the drawdown governor."
+            )
+            mapped_labels = sorted(settings.schwab_account_hashes.keys())
+            with st.form("schwab_portfolio_form"):
+                schwab_portfolio_labels = st.multiselect(
+                    "Accounts to include",
+                    mapped_labels or ["schwab-tos"],
+                    default=mapped_labels or ["schwab-tos"],
+                )
+                portfolio_submitted = st.form_submit_button(
+                    "Fetch balances & holdings",
+                    type="secondary",
+                )
+
+            if portfolio_submitted:
+                if not schwab_py_available():
+                    st.error("Install schwab-py before fetching.")
+                elif not schwab_credentials_configured() or not schwab_status["token"]:
+                    st.error("Configure Schwab credentials and complete OAuth login first.")
+                else:
+                    with st.spinner("Fetching Schwab portfolio..."):
+                        try:
+                            from trading_architect.ingestion.schwab_auth import SchwabAuthExpired
+
+                            snapshot = fetch_schwab_portfolio_snapshot(
+                                labels=schwab_portfolio_labels or None,
+                                repo=repo,
+                            )
+                            st.session_state["schwab_portfolio_snapshot"] = snapshot
+                            st.session_state.app_settings = repo.load_app_settings()
+                            settings = st.session_state.app_settings
+                        except SchwabAuthExpired as exc:
                             st.error(str(exc))
-                        else:
-                            show_ui_error(exc, context="Schwab transaction fetch")
+                        except Exception as exc:
+                            show_ui_error(exc, context="Schwab portfolio fetch")
+
+            schwab_snapshot = st.session_state.get("schwab_portfolio_snapshot")
+            if schwab_snapshot:
+                bal_rows = [
+                    {
+                        "account": b.account,
+                        "cash": b.cash,
+                        "cash_equivalents": b.cash_equivalents,
+                        "cash_and_equivalents": b.cash_and_equivalents,
+                        "portfolio_equity": b.portfolio_equity,
+                        "buying_power": b.buying_power,
+                    }
+                    for b in schwab_snapshot.accounts
+                ]
+                st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
+                c1, c2 = st.columns(2)
+                c1.metric(
+                    "Total cash & equivalents", f"${schwab_snapshot.total_cash_and_equivalents:,.2f}"
+                )
+                c2.metric("Total MTM equity", f"${schwab_snapshot.total_portfolio_equity:,.2f}")
+                if schwab_snapshot.holdings:
+                    hold_rows = []
+                    for h in schwab_snapshot.holdings:
+                        hold_rows.append(
+                            {
+                                "position": format_holding_label(h),
+                                "type": h.asset_type.value,
+                                "qty": h.total_quantity,
+                                "avg_cost": h.average_cost,
+                                "market_value": h.market_value or None,
+                                "by_account": holding_breakdown(h),
+                            }
+                        )
+                    st.dataframe(pd.DataFrame(hold_rows), use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.subheader("Transaction import")
+            with st.form("schwab_fetch_form"):
+                schwab_account = st.text_input("Account label or hash", value="schwab-tos")
+                col_start, col_end = st.columns(2)
+                with col_start:
+                    fetch_start = st.date_input("Start date", value=None, key="schwab_start")
+                with col_end:
+                    fetch_end = st.date_input("End date", value=None, key="schwab_end")
+                save_audit = st.checkbox("Save audit CSV to data/raw/", value=True)
+                schwab_submitted = st.form_submit_button("Fetch & Import", type="primary")
+
+            if schwab_submitted:
+                if not schwab_py_available():
+                    st.error("Install schwab-py before fetching.")
+                elif not schwab_credentials_configured() or not schwab_status["token"]:
+                    st.error("Configure Schwab credentials and complete OAuth login first.")
+                else:
+                    with st.spinner(f"Fetching {schwab_account}..."):
+                        try:
+                            result = import_schwab_fetch(
+                                account=schwab_account,
+                                start=fetch_start,
+                                end=fetch_end,
+                                save_csv=save_audit,
+                                repo=repo,
+                            )
+                            get_repository.clear()
+                            st.success(
+                                f"Imported **{result.imported}** events from Schwab API "
+                                f"({result.skipped_duplicates} duplicates skipped, "
+                                f"{result.review_queue} review-queue items)."
+                            )
+                            st.metric("Positions assembled", repo.position_count())
+                            st.rerun()
+                        except Exception as exc:
+                            from trading_architect.ingestion.schwab_auth import SchwabAuthExpired
+
+                            if isinstance(exc, SchwabAuthExpired):
+                                st.error(str(exc))
+                            else:
+                                show_ui_error(exc, context="Schwab transaction fetch")
 
     st.subheader("Import history")
     log = repo.list_import_log(limit=20)
@@ -704,7 +785,7 @@ elif page == "Option Selector":
     if fetch_live:
         schwab_status = schwab_connection_status()
         if not schwab_status.get("token"):
-            st.error("Schwab not connected. Complete OAuth setup under Import Data → Schwab API.")
+            st.error("Schwab not connected. Complete OAuth setup under Accounts → Backfill history.")
         else:
             with st.spinner(f"Fetching {underlying} option chain from Schwab..."):
                 try:
@@ -743,11 +824,20 @@ elif page == "Current Positions":
     silo_filter = st.selectbox("Silo", ["All", "stock_options", "futures"])
     status_filter = st.selectbox("Status", ["open", "All", "closed"], index=0)
 
-    filtered = repo.list_positions(
-        silo=None if silo_filter == "All" else silo_filter,
-        status=None if status_filter == "All" else status_filter,
-    )
+    holdings_based = current_positions(repo)
+    if holdings_based:
+        filtered = holdings_based
+        if silo_filter != "All":
+            filtered = [p for p in filtered if p.silo.value == silo_filter]
+        st.caption("Positions from latest broker holdings snapshots (as-of from Accounts).")
+    else:
+        filtered = repo.list_positions(
+            silo=None if silo_filter == "All" else silo_filter,
+            status=None if status_filter == "All" else status_filter,
+        )
     filtered = [p for p in filtered if (p.underlying or "").strip()]
+    if status_filter != "All":
+        filtered = [p for p in filtered if p.status.value == status_filter]
 
     if not filtered:
         st.info("No positions match. Import broker CSVs to get started.")
@@ -995,23 +1085,40 @@ elif page == "Settings":
         ["Starting equity", "Sizing & caps", "Risk appetite", "Epochs", "Override log"]
     )
 
-    draft = app_settings_from_json(app_settings_to_json(settings))
+    if "settings_draft" not in st.session_state:
+        st.session_state.settings_draft = app_settings_from_json(app_settings_to_json(settings))
+    draft: AppSettings = st.session_state.settings_draft
+
+    has_so_snapshots = any(repo.list_accounts(silo=Silo.STOCK_OPTIONS))
+    has_fut_snapshots = any(repo.list_accounts(silo=Silo.FUTURES))
+    so_fallback = " (fallback)" if has_so_snapshots else ""
+    fut_fallback = " (fallback)" if has_fut_snapshots else ""
 
     with tab_equity:
         draft.starting_equity_stock_options = st.number_input(
-            "Starting equity — stock/options",
+            f"Starting equity — stock/options{so_fallback}",
             value=float(draft.starting_equity_stock_options),
             step=10_000.0,
             key="set_eq_stock",
         )
         draft.starting_equity_futures = st.number_input(
-            "Starting equity — futures",
+            f"Starting equity — futures{fut_fallback}",
             value=float(draft.starting_equity_futures),
             step=10_000.0,
             key="set_eq_fut",
         )
+        draft.refresh_interval_min = int(
+            st.number_input(
+                "Auto-sync interval (minutes)",
+                value=int(draft.refresh_interval_min),
+                min_value=5,
+                max_value=120,
+                step=5,
+                key="set_refresh_interval",
+            )
+        )
         st.caption(
-            "Used for equity reconstruction, alpha-left counterfactuals, and sizing denominators."
+            "Fallback equity when no broker snapshots exist; also used for alpha-left evaluation."
         )
 
     with tab_sizing:
@@ -1125,7 +1232,7 @@ elif page == "Settings":
     if os.environ.get("RH_USERNAME"):
         st.write(f"RH_USERNAME set: {os.environ['RH_USERNAME']}")
     else:
-        st.write("RH_USERNAME: not set (enter credentials in Import → Robinhood API tab)")
+        st.write("RH_USERNAME: not set (enter credentials in Accounts → Backfill history)")
 
     st.subheader("Schwab API")
     schwab_status = schwab_connection_status()
@@ -1133,12 +1240,6 @@ elif page == "Settings":
     st.write(f"Credentials: {'configured' if schwab_status['configured'] else 'not set'}")
     st.write(f"Token: {'present' if schwab_status['token'] else 'missing'}")
     st.caption(str(schwab_status["message"]))
-    if draft.schwab_live_equity is not None and draft.schwab_live_equity_at:
-        st.caption(
-            f"Cached MTM equity for governor: ${draft.schwab_live_equity:,.2f} "
-            f"(as of {draft.schwab_live_equity_at[:19]})"
-        )
-
     if schwab_status.get("token"):
         if st.button("Refresh account list from Schwab", key="schwab_refresh_accounts"):
             try:
@@ -1169,11 +1270,12 @@ elif page == "Settings":
             st.rerun()
     else:
         st.caption(
-            "No Schwab accounts mapped yet. Connect under Import Data → Schwab, "
+            "No Schwab accounts mapped yet. Connect under Accounts → Backfill history, "
             "or click Refresh account list above."
         )
 
     if st.button("Save settings", type="primary"):
         save_settings(repo, draft)
+        st.session_state.settings_draft = draft
         st.success("Settings saved.")
         st.rerun()

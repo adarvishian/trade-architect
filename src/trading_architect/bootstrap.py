@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from trading_architect.assembly.positions import assemble_positions, enrich_positions_with_marks
@@ -14,11 +13,14 @@ from trading_architect.ingestion.base import IngestionService, resolve_epoch_id
 from trading_architect.ingestion.robinhood import RobinhoodAdapter
 from trading_architect.ingestion.schwab import SchwabAdapter
 from trading_architect.ingestion.tradovate import TradovateAdapter
-from trading_architect.models.entities import ImportResult, SchwabAccountSnapshot, TradeEvent
+from trading_architect.models.entities import ImportResult, Silo, TradeEvent
+from trading_architect.services.current_state import (
+    current_positions,
+    silo_equity_from_snapshots,
+    silo_peak_equity_from_snapshots,
+)
 from trading_architect.store.database import Database
 from trading_architect.store.repository import Repository
-
-_SCHWAB_LIVE_EQUITY_TTL = timedelta(minutes=30)
 
 
 def create_repository(db_path: Path | None = None) -> Repository:
@@ -26,50 +28,20 @@ def create_repository(db_path: Path | None = None) -> Repository:
     return Repository(db)
 
 
-def schwab_live_equity_fresh(settings: AppSettings) -> bool:
-    """True when a recent Schwab snapshot equity value is cached in settings."""
-    if settings.schwab_live_equity is None or not settings.schwab_live_equity_at:
-        return False
-    try:
-        at = datetime.fromisoformat(settings.schwab_live_equity_at.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - at < _SCHWAB_LIVE_EQUITY_TTL
-
-
-def live_stock_options_equity(settings: AppSettings) -> float | None:
-    """Broker-reported MTM equity (liquidationValue) when a fresh snapshot was synced."""
-    if schwab_live_equity_fresh(settings):
-        return settings.schwab_live_equity
-    return None
-
-
-def sync_schwab_live_equity(repo: Repository, snapshot: SchwabAccountSnapshot) -> AppSettings:
-    """Persist snapshot total equity for the drawdown governor (FR-ACCT / §16.2)."""
-    settings = repo.load_app_settings()
-    settings.schwab_live_equity = snapshot.total_portfolio_equity
-    settings.schwab_live_equity_at = snapshot.fetched_at.isoformat()
-    repo.save_app_settings(settings)
-    return settings
-
-
-def fetch_schwab_portfolio_snapshot(
-    labels: list[str] | None = None,
-    *,
-    repo: Repository | None = None,
-    client=None,
-    sync_equity: bool = True,
-) -> SchwabAccountSnapshot:
-    """Fetch Schwab balances/positions and optionally cache MTM equity in settings."""
-    from trading_architect.ingestion.schwab_accounts import fetch_portfolio_snapshot
-
-    repo = repo or create_repository()
-    snapshot = fetch_portfolio_snapshot(labels, client=client, repo=repo)
-    if sync_equity:
-        sync_schwab_live_equity(repo, snapshot)
-    return snapshot
+def _snapshot_live_equity(
+    repo: Repository,
+    settings: AppSettings,
+    silo: Silo,
+) -> tuple[float | None, float | None]:
+    """Return (live_equity, live_peak) when balance snapshots exist for the silo."""
+    accounts = repo.list_accounts(silo=silo)
+    if not accounts:
+        return None, None
+    equity, as_of = silo_equity_from_snapshots(repo, silo, settings)
+    if as_of is None:
+        return None, None
+    peak = silo_peak_equity_from_snapshots(repo, silo, settings)
+    return equity, peak
 
 
 def build_app_book_context(
@@ -77,14 +49,28 @@ def build_app_book_context(
     positions: list,
     settings: AppSettings,
     marks_provider: MarksProvider | None = None,
+    *,
+    repo: Repository | None = None,
 ) -> BookContext:
-    """Book context with live Schwab liquidationValue when a fresh snapshot is cached."""
+    """Book context using persisted broker snapshots when available."""
+    marks_provider = marks_provider if marks_provider is not None else default_marks_provider()
+    repo = repo or create_repository()
+
+    holdings_positions = current_positions(repo, marks_provider)
+    book_positions = holdings_positions if holdings_positions else positions
+
+    so_equity, so_peak = _snapshot_live_equity(repo, settings, Silo.STOCK_OPTIONS)
+    fut_equity, fut_peak = _snapshot_live_equity(repo, settings, Silo.FUTURES)
+
     return build_book_context(
         events,
-        positions,
+        book_positions,
         settings,
         marks_provider,
-        live_stock_options_equity=live_stock_options_equity(settings),
+        live_stock_options_equity=so_equity,
+        live_futures_equity=fut_equity,
+        live_stock_options_peak=so_peak,
+        live_futures_peak=fut_peak,
     )
 
 
@@ -208,3 +194,16 @@ def import_schwab_fetch(
     result.review_queue = review_count
     result.source_file = f"schwab-api::{account}"
     return _finalize_import(repo, result)
+
+
+def fetch_schwab_portfolio_snapshot(
+    labels: list[str] | None = None,
+    *,
+    repo: Repository | None = None,
+    client=None,
+):
+    """Fetch Schwab balances/positions and persist snapshots."""
+    from trading_architect.ingestion.schwab_accounts import fetch_portfolio_snapshot
+
+    repo = repo or create_repository()
+    return fetch_portfolio_snapshot(labels, client=client, repo=repo)

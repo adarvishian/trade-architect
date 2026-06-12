@@ -33,8 +33,7 @@ class AppSettings:
     starting_equity_stock_options: float = 100_000.0
     starting_equity_futures: float = 50_000.0
     schwab_account_hashes: dict[str, str] = field(default_factory=dict)
-    schwab_live_equity: float | None = None
-    schwab_live_equity_at: str | None = None
+    refresh_interval_min: int = 15
     sizing: SizingConfig = field(default_factory=lambda: SizingConfig())
     adaptive_risk: AdaptiveRiskConfig = field(default_factory=lambda: AdaptiveRiskConfig())
     option_selector: OptionSelectorConfig = field(default_factory=lambda: OptionSelectorConfig())
@@ -110,8 +109,7 @@ def app_settings_to_dict(settings: AppSettings) -> dict[str, Any]:
         "starting_equity_stock_options": settings.starting_equity_stock_options,
         "starting_equity_futures": settings.starting_equity_futures,
         "schwab_account_hashes": dict(settings.schwab_account_hashes),
-        "schwab_live_equity": settings.schwab_live_equity,
-        "schwab_live_equity_at": settings.schwab_live_equity_at,
+        "refresh_interval_min": settings.refresh_interval_min,
         "sizing": sizing_config_to_dict(settings.sizing),
         "adaptive_risk": adaptive_config_to_dict(settings.adaptive_risk),
         "option_selector": option_selector_to_dict(settings.option_selector),
@@ -132,9 +130,6 @@ def app_settings_from_dict(data: dict[str, Any]) -> AppSettings:
         {str(k): str(v) for k, v in raw_hashes.items()} if isinstance(raw_hashes, dict) else {}
     )
 
-    live_equity = data.get("schwab_live_equity")
-    schwab_live_equity = float(live_equity) if live_equity is not None else None
-
     return AppSettings(
         starting_equity_stock_options=float(
             data.get("starting_equity_stock_options", defaults.starting_equity_stock_options)
@@ -143,8 +138,7 @@ def app_settings_from_dict(data: dict[str, Any]) -> AppSettings:
             data.get("starting_equity_futures", defaults.starting_equity_futures)
         ),
         schwab_account_hashes=schwab_hashes or defaults.schwab_account_hashes,
-        schwab_live_equity=schwab_live_equity,
-        schwab_live_equity_at=data.get("schwab_live_equity_at"),
+        refresh_interval_min=int(data.get("refresh_interval_min", defaults.refresh_interval_min)),
         sizing=sizing,
         adaptive_risk=adaptive,
         option_selector=option_selector_from_dict(

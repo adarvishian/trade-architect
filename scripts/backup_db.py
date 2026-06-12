@@ -12,34 +12,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
+
+from trading_architect.store.backup import backup_db
 
 DEFAULT_DB = Path("data/trading_architect.db")
 DEFAULT_DEST = Path("data/backups")
-
-
-def backup_db(db_path: Path, dest_dir: Path) -> Path:
-    if not db_path.is_file():
-        raise FileNotFoundError(f"Database not found: {db_path}")
-
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_path = dest_dir / f"trading_architect_{stamp}.db"
-
-    src = sqlite3.connect(db_path)
-    try:
-        src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        dst = sqlite3.connect(out_path)
-        try:
-            src.backup(dst)
-        finally:
-            dst.close()
-    finally:
-        src.close()
-
-    return out_path
 
 
 def main() -> None:

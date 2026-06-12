@@ -14,6 +14,8 @@ from trading_architect import __version__
 from trading_architect.config.defaults import DATA_DIR
 from trading_architect.engines.book_context import BookContext, SiloBookState
 from trading_architect.engines.drawdown import DrawdownGovernorState
+from trading_architect.ingestion.schwab_auth import schwab_connection_status
+from trading_architect.services.sync import SyncResult
 
 UI_LOG_PATH = DATA_DIR / "trading_architect_ui.log"
 logger = logging.getLogger("trading_architect.ui")
@@ -39,6 +41,23 @@ def get_git_branch() -> str:
     except (OSError, subprocess.TimeoutExpired):
         pass
     return "unknown"
+
+
+def render_ops_banner(sync_results: list[SyncResult] | None = None) -> None:
+    """Global warning when Schwab token is near expiry or any account sync failed."""
+    sync_results = sync_results or []
+    schwab = schwab_connection_status()
+    days_left = schwab.get("days_left")
+    if days_left is not None and isinstance(days_left, int) and days_left < 2:
+        st.warning(
+            f"Schwab refresh token expires in **{days_left}** day(s). "
+            "Re-authenticate with `ta fetch-schwab --login` or Settings before sync goes stale."
+        )
+    for result in sync_results:
+        if result.status == "auth_required":
+            st.warning(f"**{result.account_label}** — auth required: {result.message}")
+        elif result.status == "error":
+            st.warning(f"**{result.account_label}** — sync error: {result.message}")
 
 
 def render_app_header() -> None:
