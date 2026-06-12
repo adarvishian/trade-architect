@@ -12,6 +12,7 @@ from trading_architect.models.entities import (
     HoldingLeg,
     Silo,
 )
+from trading_architect.services.cost_basis import normalize_option_cost_per_share
 from trading_architect.store.repository import (
     AccountKind,
     BalanceSnapshotRecord,
@@ -25,9 +26,15 @@ def _holding_rows_from_consolidated(
     *,
     account_id: int,
     as_of: datetime,
+    broker_kind: AccountKind | None = None,
 ) -> list[HoldingSnapshotRecord]:
     rows: list[HoldingSnapshotRecord] = []
     total_abs = sum(abs(q) for q in holding.by_account.values()) or abs(holding.total_quantity)
+    avg_cost = normalize_option_cost_per_share(
+        holding.average_cost,
+        holding.asset_type,
+        broker_kind=broker_kind,
+    )
     for _account_label, qty in holding.by_account.items():
         if qty == 0:
             continue
@@ -45,7 +52,7 @@ def _holding_rows_from_consolidated(
                 qty=qty,
                 mark=mark,
                 mtm_value=mtm,
-                cost_basis=holding.average_cost,
+                cost_basis=avg_cost,
             )
         )
     return rows
@@ -62,6 +69,8 @@ def persist_legs_snapshot(
     legs: list[HoldingLeg],
 ) -> list[str]:
     """Upsert accounts and write balance + holdings snapshots from per-account legs."""
+    from trading_architect.services.cash_events import detect_cash_jump
+
     labels: list[str] = []
     legs_by_account: dict[str, list[HoldingLeg]] = {}
     for leg in legs:
@@ -73,8 +82,15 @@ def persist_legs_snapshot(
             label=balance.account,
             silo=silo,
             institution=institution,
+            preserve_deployable=True,
         )
         labels.append(record.label)
+        detect_cash_jump(
+            repo,
+            account_id=record.id,
+            new_cash=balance.cash_and_equivalents,
+            as_of=fetched_at,
+        )
         repo.record_balance_snapshot(
             BalanceSnapshotRecord(
                 account_id=record.id,
@@ -85,14 +101,6 @@ def persist_legs_snapshot(
                 source="api",
             )
         )
-        from trading_architect.services.cash_events import detect_cash_jump
-
-        detect_cash_jump(
-            repo,
-            account_id=record.id,
-            new_cash=balance.cash_and_equivalents,
-            as_of=fetched_at,
-        )
         account_legs = legs_by_account.get(balance.account, [])
         consolidated = consolidate_holdings(account_legs)
         holding_rows: list[HoldingSnapshotRecord] = []
@@ -102,6 +110,7 @@ def persist_legs_snapshot(
                     holding,
                     account_id=record.id,
                     as_of=fetched_at,
+                    broker_kind=kind,
                 )
             )
         repo.record_holdings_snapshots(record.id, fetched_at, holding_rows)
@@ -119,16 +128,20 @@ def persist_manual_balance(
     as_of: datetime,
     cash: float | None = None,
     include_in_deployable: bool = True,
+    account_kind: AccountKind = "manual",
 ) -> int:
     """Record a manual balance update for banks / Tradovate cash accounts."""
+    from trading_architect.services.cash_events import detect_cash_jump
+
     record = repo.upsert_account(
-        kind="manual",
+        kind=account_kind,
         label=label,
         silo=silo,
         institution=institution,
         include_in_deployable=include_in_deployable,
     )
     cash_val = equity_value if cash is None else cash
+    detect_cash_jump(repo, account_id=record.id, new_cash=cash_val, as_of=as_of)
     repo.record_balance_snapshot(
         BalanceSnapshotRecord(
             account_id=record.id,
@@ -139,7 +152,4 @@ def persist_manual_balance(
             source="manual",
         )
     )
-    from trading_architect.services.cash_events import detect_cash_jump
-
-    detect_cash_jump(repo, account_id=record.id, new_cash=cash_val, as_of=as_of)
     return record.id

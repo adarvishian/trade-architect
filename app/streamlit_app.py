@@ -48,7 +48,7 @@ from trading_architect.ingestion.robinhood_fetch import (
 from trading_architect.ingestion.schwab_accounts import list_accounts
 from trading_architect.ingestion.schwab_auth import schwab_connection_status, schwab_py_available
 from trading_architect.models.entities import Silo
-from trading_architect.services.current_state import account_cards
+from trading_architect.services.current_state import account_cards, newest_equity_as_of
 from trading_architect.services.snapshot_persist import persist_manual_balance
 from trading_architect.services.sync import sync_all
 
@@ -120,7 +120,9 @@ st.sidebar.title("Trading Architect")
 default_page = st.session_state.pop("nav_page", PAGES[0])
 page_index = PAGES.index(default_page) if default_page in PAGES else 0
 page = st.sidebar.radio("Navigate", PAGES, index=page_index)
-render_governor_sidebar(book)
+_as_of = newest_equity_as_of(repo)
+_as_of_text = _as_of.strftime("%Y-%m-%d %H:%M UTC") if _as_of else None
+render_governor_sidebar(book, equity_as_of=_as_of_text)
 
 render_app_header()
 render_ops_banner(st.session_state.get("sync_results"))
@@ -178,11 +180,16 @@ elif page == "Accounts":
         m_label = st.text_input("Label", placeholder="bank-checking")
         m_institution = st.text_input("Institution", placeholder="Chase")
         m_silo = st.selectbox("Silo", ["stock_options", "futures"])
+        m_cash_only = st.checkbox(
+            "Cash-only (excluded from trading equity)",
+            value=False,
+            help="Use for bank accounts that should not inflate the stock/options silo.",
+        )
         m_deployable = st.checkbox("Include in deployable capital", value=True)
         m_submitted = st.form_submit_button("Add account")
     if m_submitted and m_label:
         repo.upsert_account(
-            kind="manual",
+            kind="cash_only" if m_cash_only else "manual",
             label=m_label.strip(),
             silo=Silo(m_silo),
             institution=m_institution.strip(),
@@ -616,12 +623,15 @@ elif page == "Size a Trade":
     from trading_architect.engines.capital import silo_brokerage_liquidity
 
     silo_cash, silo_bp = silo_brokerage_liquidity(repo, silo)
+    cash_label = f"${silo_cash:,.0f}" if silo_cash is not None else "—"
     st.subheader("Book context")
     st.caption(
         f"Silo equity **${silo_state.equity:,.0f}** · open risk **${silo_state.open_dollar_risk:,.0f}** · "
-        f"brokerage cash **${silo_cash:,.0f}** · drawdown **{book.effective_drawdown_pct:.1%}** "
+        f"brokerage cash **{cash_label}** · drawdown **{book.effective_drawdown_pct:.1%}** "
         f"({book.effective_governor.state.value})"
     )
+    if silo_cash is None:
+        st.warning("Brokerage cash unavailable — sizing will not apply a cash cap.")
 
     if st.button("Recommend size", type="primary", key="size_btn"):
         import json
