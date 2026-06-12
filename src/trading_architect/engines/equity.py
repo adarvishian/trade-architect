@@ -24,14 +24,6 @@ class MarkFallbackStats:
     missing_mark_symbols: tuple[str, ...]
 
 
-class EquitySnapshot:
-    silo: Silo
-    asof: pd.Timestamp
-    realized_cash: float
-    open_mark: float
-    total_equity: float
-
-
 def _latest_marks_by_symbol(events: list[TradeEvent]) -> dict[str, float]:
     marks: dict[str, float] = {}
     for event in sorted(events, key=lambda e: e.timestamp):

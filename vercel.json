@@ -1,8 +1,0 @@
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "asgi.py": {
-      "excludeFiles": "{tests/**,.venv/**,**/*.mhtml,**/*.docx,sample csv/**,data/**,.git/**,.github/**,.pytest_cache/**,.ruff_cache/**,scripts/**}"
-    }
-  }
-}

@@ -51,7 +51,6 @@ class OptionSelectorConfig:
     max_dte: int = 365
     dte_buffer_days: int = 30
     strikes_below_target: int = 2
-    strikes_above_target: int = 0
     iv_assumption: IvAssumption = IvAssumption.CONSTANT
     iv_decline_pct: float = 0.10
     target_delta: float = 0.40

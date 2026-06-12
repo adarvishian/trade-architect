@@ -33,15 +33,18 @@ def _snapshot_live_equity(
     settings: AppSettings,
     silo: Silo,
 ) -> tuple[float | None, float | None]:
-    """Return (live_equity, live_peak) when balance snapshots exist for the silo."""
+    """Return (deposit-adjusted live equity, adjusted peak) when snapshots exist."""
+    from trading_architect.services.cash_events import trading_equity_adjustment
+
     accounts = repo.list_accounts(silo=silo)
     if not accounts:
         return None, None
     equity, as_of = silo_equity_from_snapshots(repo, silo, settings)
     if as_of is None:
         return None, None
+    adjusted = trading_equity_adjustment(repo, silo, equity)
     peak = silo_peak_equity_from_snapshots(repo, silo, settings)
-    return equity, peak
+    return adjusted, peak
 
 
 def build_app_book_context(

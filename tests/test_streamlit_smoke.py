@@ -12,13 +12,8 @@ APP_FILE = APP_DIR / "streamlit_app.py"
 
 PAGES = [
     "Dashboard",
-    "Accounts",
     "Size a Trade",
-    "Option Selector",
-    "Current Positions",
-    "Alpha Left on Table",
-    "Edge & Risk Review",
-    "Review Queue",
+    "Accounts",
     "Settings",
 ]
 
@@ -67,4 +62,4 @@ def test_dashboard_shows_metrics_with_data(streamlit_app_env):
     at = AppTest.from_file(str(APP_FILE))
     at.run(timeout=60)
     assert not at.exception
-    assert any("Trade events" in m.label for m in at.metric)
+    assert any("Total capital" in m.label or "Deployable" in m.label for m in at.metric)

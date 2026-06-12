@@ -85,6 +85,14 @@ def persist_legs_snapshot(
                 source="api",
             )
         )
+        from trading_architect.services.cash_events import detect_cash_jump
+
+        detect_cash_jump(
+            repo,
+            account_id=record.id,
+            new_cash=balance.cash_and_equivalents,
+            as_of=fetched_at,
+        )
         account_legs = legs_by_account.get(balance.account, [])
         consolidated = consolidate_holdings(account_legs)
         holding_rows: list[HoldingSnapshotRecord] = []
@@ -131,4 +139,7 @@ def persist_manual_balance(
             source="manual",
         )
     )
+    from trading_architect.services.cash_events import detect_cash_jump
+
+    detect_cash_jump(repo, account_id=record.id, new_cash=cash_val, as_of=as_of)
     return record.id

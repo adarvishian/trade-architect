@@ -33,12 +33,6 @@ ignore = ["E501"]
 [project.scripts]
 ta = "trading_architect.cli:main"
 
-[tool.vercel]
-entrypoint = "asgi:app"
-
-[tool.vercel.scripts]
-build = "pip install -e . --no-deps"
-
 [tool.setuptools.packages.find]
 where = ["src"]
 

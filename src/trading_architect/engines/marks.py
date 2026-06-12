@@ -23,6 +23,7 @@ class Mark:
     asof: datetime
     delayed: bool = False
     iv_fallback: bool = False
+    theta: float | None = None
 
 
 @runtime_checkable
@@ -201,6 +202,7 @@ class SchwabMarksProvider:
             asof=_naive_dt(quote.asof),
             delayed=quote.delayed,
             iv_fallback=iv_fallback,
+            theta=quote.theta,
         )
 
     def _underlying_spot_from_cache(self, underlying: str) -> float | None:
@@ -244,6 +246,7 @@ class SchwabMarksProvider:
                 delta=delta,
                 asof=mark.asof,
                 iv_fallback=iv_fallback,
+                theta=getattr(mark, "theta", None),
             )
         return out
 

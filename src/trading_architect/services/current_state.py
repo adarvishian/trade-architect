@@ -144,7 +144,9 @@ def silo_equity_from_snapshots(
 
 
 def silo_peak_equity_from_snapshots(repo: Repository, silo: Silo, settings: AppSettings) -> float:
-    """High-water mark from balance snapshot history for the silo."""
+    """High-water mark from balance snapshot history, deposit-adjusted when classified."""
+    from trading_architect.services.cash_events import trading_equity_adjustment
+
     accounts = repo.list_accounts(silo=silo)
     if not accounts:
         return settings.starting_equity()[silo]
@@ -152,9 +154,11 @@ def silo_peak_equity_from_snapshots(repo: Repository, silo: Silo, settings: AppS
     peak = settings.starting_equity()[silo]
     for acct in accounts:
         for snap in repo.balance_history(acct.id):
-            peak = max(peak, snap.equity_value)
+            adjusted = trading_equity_adjustment(repo, silo, snap.equity_value)
+            peak = max(peak, adjusted)
     current, _ = silo_equity_from_snapshots(repo, silo, settings)
-    return max(peak, current)
+    current_adj = trading_equity_adjustment(repo, silo, current)
+    return max(peak, current_adj)
 
 
 def live_stock_options_equity(

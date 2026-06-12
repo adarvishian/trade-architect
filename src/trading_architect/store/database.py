@@ -188,6 +188,34 @@ CREATE TABLE IF NOT EXISTS size_recommendations (
 
 CREATE INDEX IF NOT EXISTS idx_size_recommendations_ts ON size_recommendations(ts);
 CREATE INDEX IF NOT EXISTS idx_position_overrides_silo ON position_overrides(silo);
+
+CREATE TABLE IF NOT EXISTS book_metrics_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    metric_date TEXT NOT NULL,
+    silo TEXT NOT NULL,
+    equity REAL NOT NULL DEFAULT 0,
+    open_heat REAL NOT NULL DEFAULT 0,
+    leverage REAL NOT NULL DEFAULT 0,
+    theta_day REAL NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(metric_date, silo)
+);
+
+CREATE TABLE IF NOT EXISTS cash_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    detected_at TEXT NOT NULL,
+    prior_cash REAL NOT NULL,
+    new_cash REAL NOT NULL,
+    delta REAL NOT NULL,
+    classification TEXT NOT NULL DEFAULT 'pending',
+    resolved_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_cash_events_account ON cash_events(account_id);
+CREATE INDEX IF NOT EXISTS idx_cash_events_classification ON cash_events(classification);
+CREATE INDEX IF NOT EXISTS idx_book_metrics_daily_date ON book_metrics_daily(metric_date);
 """
 
 
@@ -218,6 +246,7 @@ class Database:
             self._migrate_trade_events(conn)
             self._migrate_accounts(conn)
             self._migrate_phase2(conn)
+            self._migrate_phase3(conn)
             for epoch in DEFAULT_EPOCHS:
                 conn.execute(
                     """
@@ -330,6 +359,53 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_size_recommendations_ts
                     ON size_recommendations(ts);
+                """
+            )
+
+    def _migrate_phase3(self, conn: sqlite3.Connection) -> None:
+        """Additive migrations for Phase 3 — book metrics and cash events."""
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "book_metrics_daily" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS book_metrics_daily (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    metric_date TEXT NOT NULL,
+                    silo TEXT NOT NULL,
+                    equity REAL NOT NULL DEFAULT 0,
+                    open_heat REAL NOT NULL DEFAULT 0,
+                    leverage REAL NOT NULL DEFAULT 0,
+                    theta_day REAL NOT NULL DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(metric_date, silo)
+                );
+                CREATE INDEX IF NOT EXISTS idx_book_metrics_daily_date
+                    ON book_metrics_daily(metric_date);
+                """
+            )
+        if "cash_events" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS cash_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL REFERENCES accounts(id),
+                    detected_at TEXT NOT NULL,
+                    prior_cash REAL NOT NULL,
+                    new_cash REAL NOT NULL,
+                    delta REAL NOT NULL,
+                    classification TEXT NOT NULL DEFAULT 'pending',
+                    resolved_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_cash_events_account
+                    ON cash_events(account_id);
+                CREATE INDEX IF NOT EXISTS idx_cash_events_classification
+                    ON cash_events(classification);
                 """
             )
 

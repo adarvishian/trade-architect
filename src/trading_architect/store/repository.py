@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -42,6 +42,7 @@ from trading_architect.store.database import (
 
 AccountKind = Literal["schwab", "robinhood", "tradovate", "manual"]
 SnapshotSource = Literal["api", "manual"]
+CashEventClassification = Literal["pending", "deposit", "withdrawal", "market_move"]
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,29 @@ class SizeRecommendationRecord:
     binding_constraint: str
     inputs_json: str
     silo_equity: float
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class BookMetricsDailyRecord:
+    metric_date: date
+    silo: Silo
+    equity: float
+    open_heat: float
+    leverage: float
+    theta_day: float
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class CashEventRecord:
+    account_id: int
+    detected_at: datetime
+    prior_cash: float
+    new_cash: float
+    delta: float
+    classification: CashEventClassification = "pending"
+    resolved_at: datetime | None = None
     id: int | None = None
 
 
@@ -335,6 +359,20 @@ class Repository:
         with self.db.connect() as conn:
             rows = conn.execute("SELECT * FROM review_queue ORDER BY created_at DESC").fetchall()
         return [row_to_review_item(r) for r in rows]
+
+    def dismiss_review_item(self, item_id: str) -> bool:
+        with self.db.connect() as conn:
+            cursor = conn.execute("DELETE FROM review_queue WHERE item_id = ?", (int(item_id),))
+        return cursor.rowcount > 0
+
+    def resolve_review_item(self, item_id: str) -> bool:
+        """Mark review item handled — removes from queue (same as dismiss)."""
+        return self.dismiss_review_item(item_id)
+
+    def review_queue_count(self) -> int:
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM review_queue").fetchone()
+        return int(row["c"])
 
     def event_count(self) -> int:
         with self.db.connect() as conn:
@@ -918,3 +956,219 @@ class Repository:
             )
             for row in rows
         ]
+
+    def record_book_metrics_daily(
+        self,
+        *,
+        metric_date: date,
+        silo: Silo,
+        equity: float,
+        open_heat: float,
+        leverage: float,
+        theta_day: float,
+    ) -> BookMetricsDailyRecord:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO book_metrics_daily (
+                    metric_date, silo, equity, open_heat, leverage, theta_day
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(metric_date, silo) DO NOTHING
+                """,
+                (
+                    metric_date.isoformat(),
+                    silo.value,
+                    equity,
+                    open_heat,
+                    leverage,
+                    theta_day,
+                ),
+            )
+        return BookMetricsDailyRecord(
+            metric_date=metric_date,
+            silo=silo,
+            equity=equity,
+            open_heat=open_heat,
+            leverage=leverage,
+            theta_day=theta_day,
+        )
+
+    def list_book_metrics_daily(
+        self,
+        *,
+        silo: Silo | None = None,
+        since: date | None = None,
+    ) -> list[BookMetricsDailyRecord]:
+        query = "SELECT * FROM book_metrics_daily WHERE 1=1"
+        params: list = []
+        if silo:
+            query += " AND silo = ?"
+            params.append(silo.value)
+        if since:
+            query += " AND metric_date >= ?"
+            params.append(since.isoformat())
+        query += " ORDER BY metric_date ASC"
+        with self.db.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            BookMetricsDailyRecord(
+                id=row["id"],
+                metric_date=date.fromisoformat(row["metric_date"]),
+                silo=Silo(row["silo"]),
+                equity=row["equity"],
+                open_heat=row["open_heat"],
+                leverage=row["leverage"],
+                theta_day=row["theta_day"],
+            )
+            for row in rows
+        ]
+
+    def has_book_metrics_for_date(self, metric_date: date, silo: Silo) -> bool:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM book_metrics_daily
+                WHERE metric_date = ? AND silo = ?
+                LIMIT 1
+                """,
+                (metric_date.isoformat(), silo.value),
+            ).fetchone()
+        return row is not None
+
+    def record_cash_event(self, event: CashEventRecord) -> CashEventRecord:
+        detected = event.detected_at.astimezone(timezone.utc).isoformat()
+        resolved = (
+            event.resolved_at.astimezone(timezone.utc).isoformat() if event.resolved_at else None
+        )
+        with self.db.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO cash_events (
+                    account_id, detected_at, prior_cash, new_cash, delta,
+                    classification, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.account_id,
+                    detected,
+                    event.prior_cash,
+                    event.new_cash,
+                    event.delta,
+                    event.classification,
+                    resolved,
+                ),
+            )
+            row_id = cursor.lastrowid
+        return CashEventRecord(
+            id=row_id,
+            account_id=event.account_id,
+            detected_at=event.detected_at,
+            prior_cash=event.prior_cash,
+            new_cash=event.new_cash,
+            delta=event.delta,
+            classification=event.classification,
+            resolved_at=event.resolved_at,
+        )
+
+    def list_cash_events(
+        self,
+        *,
+        classification: CashEventClassification | None = None,
+        account_id: int | None = None,
+    ) -> list[CashEventRecord]:
+        query = "SELECT * FROM cash_events WHERE 1=1"
+        params: list = []
+        if classification:
+            query += " AND classification = ?"
+            params.append(classification)
+        if account_id is not None:
+            query += " AND account_id = ?"
+            params.append(account_id)
+        query += " ORDER BY detected_at DESC"
+        with self.db.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            CashEventRecord(
+                id=row["id"],
+                account_id=row["account_id"],
+                detected_at=_parse_dt(row["detected_at"]),
+                prior_cash=row["prior_cash"],
+                new_cash=row["new_cash"],
+                delta=row["delta"],
+                classification=row["classification"],
+                resolved_at=_parse_dt(row["resolved_at"]),
+            )
+            for row in rows
+        ]
+
+    def classify_cash_event(
+        self,
+        event_id: int,
+        classification: CashEventClassification,
+    ) -> CashEventRecord | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE cash_events
+                SET classification = ?, resolved_at = ?
+                WHERE id = ?
+                """,
+                (classification, now, event_id),
+            )
+            row = conn.execute("SELECT * FROM cash_events WHERE id = ?", (event_id,)).fetchone()
+        if not row:
+            return None
+        return CashEventRecord(
+            id=row["id"],
+            account_id=row["account_id"],
+            detected_at=_parse_dt(row["detected_at"]),
+            prior_cash=row["prior_cash"],
+            new_cash=row["new_cash"],
+            delta=row["delta"],
+            classification=row["classification"],
+            resolved_at=_parse_dt(row["resolved_at"]),
+        )
+
+    def net_cashflow_adjustment_for_silo(self, silo: Silo) -> float:
+        """Net deposits minus withdrawals (classified) for drawdown HWM adjustment."""
+        accounts = {a.id for a in self.list_accounts(silo=silo)}
+        if not accounts:
+            return 0.0
+        placeholders = ",".join("?" * len(accounts))
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT classification, delta FROM cash_events
+                WHERE account_id IN ({placeholders})
+                AND classification IN ('deposit', 'withdrawal')
+                """,
+                list(accounts),
+            ).fetchall()
+        net = 0.0
+        for row in rows:
+            if row["classification"] == "deposit":
+                net += row["delta"]
+            elif row["classification"] == "withdrawal":
+                net -= abs(row["delta"])
+        return net
+
+    def list_events_after(
+        self,
+        *,
+        since: datetime,
+        silo: Silo | None = None,
+        underlying: str | None = None,
+    ) -> list[TradeEvent]:
+        query = "SELECT payload_json FROM trade_events WHERE timestamp >= ?"
+        params: list = [since.astimezone(timezone.utc).isoformat()]
+        if silo:
+            query += " AND silo = ?"
+            params.append(silo.value)
+        if underlying:
+            query += " AND underlying = ?"
+            params.append(underlying.upper())
+        query += " ORDER BY timestamp ASC"
+        with self.db.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [row_to_event(r) for r in rows]

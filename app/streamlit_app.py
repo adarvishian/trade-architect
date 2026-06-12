@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from dashboard_ui import render_dashboard
+from option_selector_ui import render_option_selector_branch
 from ui_helpers import (
-    cap_status_pct,
     render_app_header,
     render_governor_sidebar,
     render_ops_banner,
     show_ui_error,
-    silo_book_row,
 )
 
 import trading_architect  # noqa: F401 — loads .env on import
@@ -38,24 +38,17 @@ from trading_architect.config.user_settings import (
     app_settings_to_json,
     diff_app_settings,
 )
-from trading_architect.engines.capital import (
-    deployable_capital,
-    monthly_net_cashflow,
-    project_equity,
-)
 from trading_architect.ingestion.robinhood_fetch import (
     fetch_portfolio_snapshot,
     format_holding_label,
     holding_breakdown,
     rh_session_active,
     robin_stocks_available,
-    stock_account_breakdown,
 )
 from trading_architect.ingestion.schwab_accounts import list_accounts
 from trading_architect.ingestion.schwab_auth import schwab_connection_status, schwab_py_available
 from trading_architect.models.entities import Silo
-from trading_architect.services.current_state import account_cards, current_positions
-from trading_architect.services.position_stops import has_stop
+from trading_architect.services.current_state import account_cards
 from trading_architect.services.snapshot_persist import persist_manual_balance
 from trading_architect.services.sync import sync_all
 
@@ -63,13 +56,8 @@ load_env()
 
 PAGES = [
     "Dashboard",
-    "Accounts",
     "Size a Trade",
-    "Option Selector",
-    "Current Positions",
-    "Alpha Left on Table",
-    "Edge & Risk Review",
-    "Review Queue",
+    "Accounts",
     "Settings",
 ]
 
@@ -108,6 +96,10 @@ def load_session_data():
     events = repo.list_events()
     positions = repo.list_positions()
     book = build_app_book_context(events, positions, settings, repo=repo)
+    from trading_architect.engines.marks import default_marks_provider
+    from trading_architect.services.book_metrics import maybe_record_daily_metrics
+
+    maybe_record_daily_metrics(repo, book, settings=settings, marks_provider=default_marks_provider())
     return repo, settings, events, positions, book
 
 
@@ -125,99 +117,16 @@ st.set_page_config(page_title="Trading Architect", layout="wide", initial_sideba
 repo, settings, events, positions, book = load_session_data()
 
 st.sidebar.title("Trading Architect")
-page = st.sidebar.radio("Navigate", PAGES, index=0)
+default_page = st.session_state.pop("nav_page", PAGES[0])
+page_index = PAGES.index(default_page) if default_page in PAGES else 0
+page = st.sidebar.radio("Navigate", PAGES, index=page_index)
 render_governor_sidebar(book)
 
 render_app_header()
 render_ops_banner(st.session_state.get("sync_results"))
 
 if page == "Dashboard":
-    st.header("Dashboard")
-
-    deploy = deployable_capital(repo, settings)
-    if deploy.total_capital > 0 or repo.list_accounts():
-        st.subheader("What can I allocate")
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("Total capital", f"${deploy.total_capital:,.0f}")
-        d2.metric("Deployable", f"${deploy.deployable_total:,.0f}")
-        d3.metric("Brokerage cash", f"${deploy.brokerage_cash:,.0f}")
-        d4.metric("Reserve held", f"${deploy.reserve_held:,.0f}")
-        st.caption(
-            f"Breakdown: brokerage cash **${deploy.brokerage_cash:,.0f}** + "
-            f"transferable **${deploy.transferable_cash:,.0f}** + "
-            f"next month net **${deploy.monthly_net_cashflow:,.0f}** "
-            f"(income ${settings.monthly_income_after_tax:,.0f} − expenses ${settings.monthly_expenses:,.0f}). "
-            f"Reserve = {settings.cash_reserve_months}× expenses."
-        )
-        if deploy.as_of:
-            st.caption(f"As of {deploy.as_of.strftime('%Y-%m-%d %H:%M UTC')}")
-
-        st.subheader("Equity projection")
-        return_pct = st.number_input(
-            "Annual return assumption (%)",
-            value=0.0,
-            min_value=-50.0,
-            max_value=100.0,
-            step=1.0,
-            key="proj_return_pct",
-            help="User-set scenario only — not estimated from trade history.",
-        )
-        contrib = monthly_net_cashflow(settings)
-        base_equity = book.account_equity
-        for months in (6, 12):
-            series = project_equity(base_equity, contrib, return_pct / 100.0, months)
-            projected = series[-1]
-            st.metric(f"{months}-month projected equity", f"${projected:,.0f}")
-
-    if not events:
-        st.info("Link accounts under **Accounts** or import history for evaluation.")
-    else:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Trade events", repo.event_count())
-        c2.metric("Positions", repo.position_count())
-        c3.metric("Account equity", f"${book.account_equity:,.0f}")
-        c4.metric("Effective drawdown", f"{book.effective_drawdown_pct:.1%}")
-
-        st.subheader("Book exposure vs caps")
-        summary = pd.DataFrame([silo_book_row(book.stock_options), silo_book_row(book.futures)])
-        st.dataframe(
-            summary[
-                [
-                    "silo",
-                    "equity",
-                    "drawdown",
-                    "governor",
-                    "heat",
-                    "heat_cap",
-                    "heat_status",
-                    "leverage",
-                    "leverage_cap",
-                    "lev_status",
-                    "open_positions",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        fb = book.mark_fallbacks
-        if fb.legs_at_cost_basis or fb.delta_iv_fallbacks:
-            st.warning(
-                f"Mark fallbacks active: **{fb.legs_at_cost_basis}** open leg(s) priced at cost basis, "
-                f"**{fb.delta_iv_fallbacks}** delta estimate(s) using default IV (20%). "
-                "MTM equity may understate drawdown until live marks are available."
-            )
-            if fb.missing_mark_symbols:
-                st.caption(f"Missing marks: {', '.join(fb.missing_mark_symbols)}")
-
-        review_count = len(repo.list_review_queue())
-        if review_count:
-            st.warning(f"{review_count} row(s) in the review queue — see **Review Queue**.")
-
-        imports = repo.list_import_log(limit=5)
-        if imports:
-            st.subheader("Recent imports")
-            st.dataframe(pd.DataFrame(imports), use_container_width=True, hide_index=True)
+    render_dashboard(repo, settings, events, book)
 
 elif page == "Accounts":
     st.header("Accounts")
@@ -246,6 +155,22 @@ elif page == "Accounts":
             cols[4].caption(f"{icon} {status}")
     else:
         st.info("No accounts yet. Add a manual account below or connect Schwab/Robinhood.")
+
+    st.divider()
+    review_count = repo.review_queue_count()
+    if review_count:
+        st.subheader(f"Review queue ({review_count})")
+        items = repo.list_review_queue()
+        for item in items[:20]:
+            with st.expander(f"{item.source_file} row {item.row_index}: {item.reason}"):
+                st.json(item.raw_row)
+                c1, c2 = st.columns(2)
+                if c1.button("Dismiss", key=f"rq_dismiss_{item.item_id}"):
+                    repo.dismiss_review_item(item.item_id)
+                    st.rerun()
+                if c2.button("Resolve", key=f"rq_resolve_{item.item_id}"):
+                    repo.resolve_review_item(item.item_id)
+                    st.rerun()
 
     st.divider()
     st.subheader("Manual accounts")
@@ -679,6 +604,7 @@ elif page == "Size a Trade":
             "Premium per contract", value=5.0, min_value=0.01, key="size_premium"
         )
         delta = st.slider("Delta", 0.05, 0.95, 0.45, key="size_delta")
+        render_option_selector_branch(repo, settings, events, book, underlying)
     else:
         stop = st.number_input("Stop price", value=95.0, min_value=0.01, key="size_stop")
 
@@ -756,436 +682,6 @@ elif page == "Size a Trade":
                 for layer in rec.layers
             ]
             st.dataframe(pd.DataFrame(layer_rows), use_container_width=True)
-
-elif page == "Option Selector":
-    st.header("Option Selector")
-    st.caption("Greeks-based contract ranking — expression optimization only (PRD §7.5)")
-
-    from trading_architect.engines.options_selector import (
-        OptionDirection,
-        OptionSelectorInput,
-        rank_contracts,
-    )
-    from trading_architect.ingestion.chain import parse_chain_csv
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        underlying = st.text_input("Underlying", "NVDA", key="opt_underlying").upper()
-    with c2:
-        spot = st.number_input("Spot", value=200.0, min_value=0.01, key="opt_spot")
-    with c3:
-        target = st.number_input("Target price", value=210.0, min_value=0.01, key="opt_target")
-
-    c4, c5, c6 = st.columns(3)
-    with c4:
-        direction = st.selectbox("Direction", ["long_call", "long_put"], key="opt_dir")
-    with c5:
-        hold_days = st.number_input("Expected hold (days)", value=60, min_value=1, key="opt_hold")
-    with c6:
-        path = st.selectbox("Path", ["gradual", "fast"], key="opt_path")
-
-    iv_rank = st.slider("IV rank (optional, 0–1)", 0.0, 1.0, 0.0, key="opt_iv_rank")
-    iv_rank_val = iv_rank if iv_rank > 0 else None
-
-    chain_file = st.file_uploader("Option chain CSV", type=["csv"], key="opt_chain")
-    fetch_live = st.button("Fetch live chain (Schwab)", key="opt_fetch_schwab")
-    recent_snapshots = repo.list_chain_snapshots(underlying if underlying else None)
-    if recent_snapshots and not chain_file:
-        st.caption(f"{len(recent_snapshots)} saved chain snapshot(s) for {underlying or 'all'}.")
-
-    st.caption(
-        f"Stock/options equity ${book.stock_options.equity:,.0f} · "
-        f"heat headroom {max(0, settings.sizing.heat_cap - book.stock_options.heat):.0%}"
-    )
-
-    def _run_option_rank(snapshot):
-        repo.save_chain_snapshot(snapshot)
-        return rank_contracts(
-            snapshot,
-            OptionSelectorInput(
-                underlying=underlying,
-                direction=OptionDirection(direction),
-                target_price=target,
-                expected_hold_days=int(hold_days),
-                path=path,
-            ),
-            book.exposure_for_silo(Silo.STOCK_OPTIONS),
-            config=settings.option_selector,
-            events=events,
-            top_n=6,
-        )
-
-    def _display_option_results(result):
-        st.warning(result.disclaimer)
-        if not result.ranked:
-            st.info("No contracts matched. Check DTE band (90–365 + buffer) and chain columns.")
-            return
-        rows = []
-        for item in result.ranked:
-            c = item.contract
-            sr = item.size_recommendation
-            rows.append(
-                {
-                    "rank": item.rank,
-                    "right": c.right,
-                    "strike": c.strike,
-                    "expiry": str(c.expiry),
-                    "dte": c.dte,
-                    "premium": round(item.premium, 2),
-                    "score": round(item.composite_score, 3),
-                    "proj_return_%": round(item.projected_return_pct, 1),
-                    "proj_R": round(item.projected_r_multiple, 2),
-                    "contracts": sr.recommended_qty_int if sr else 0,
-                    "delta": c.delta,
-                    "theta": c.theta,
-                    "vega": c.vega,
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-        for item in result.ranked:
-            with st.expander(f"#{item.rank} {item.contract.right} ${item.contract.strike:.0f}"):
-                st.write(item.rationale)
-                if item.size_recommendation:
-                    st.caption(item.size_recommendation.rationale.replace("**", ""))
-                for note in item.tradeoff_notes:
-                    st.write(f"• {note}")
-
-    if fetch_live:
-        schwab_status = schwab_connection_status()
-        if not schwab_status.get("token"):
-            st.error("Schwab not connected. Complete OAuth setup under Accounts → Backfill history.")
-        else:
-            with st.spinner(f"Fetching {underlying} option chain from Schwab..."):
-                try:
-                    from trading_architect.ingestion.schwab_rest import fetch_chain_snapshot
-
-                    snapshot = fetch_chain_snapshot(underlying)
-                    if spot:
-                        snapshot = snapshot.model_copy(update={"spot_price": spot})
-                    result = _run_option_rank(snapshot)
-                    st.success(f"Fetched {len(snapshot.contracts)} contracts from Schwab.")
-                    _display_option_results(result)
-                except Exception as exc:
-                    from trading_architect.ingestion.schwab_auth import SchwabAuthExpired
-
-                    if isinstance(exc, SchwabAuthExpired):
-                        st.error(str(exc))
-                    else:
-                        show_ui_error(exc, context="Schwab option chain fetch")
-
-    if chain_file and st.button("Rank contracts", type="primary", key="opt_btn"):
-        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-            tmp.write(chain_file.getvalue())
-            tmp_path = Path(tmp.name)
-
-        try:
-            snapshot = parse_chain_csv(tmp_path, underlying, spot, iv_rank=iv_rank_val)
-            result = _run_option_rank(snapshot)
-            _display_option_results(result)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-elif page == "Current Positions":
-    st.header("Current Positions")
-    st.caption("Blended exposure vs heat/leverage caps and drawdown governor (PRD §8.1)")
-
-    silo_filter = st.selectbox("Silo", ["All", "stock_options", "futures"])
-    status_filter = st.selectbox("Status", ["open", "All", "closed"], index=0)
-
-    holdings_based = current_positions(repo)
-    if holdings_based:
-        filtered = holdings_based
-        if silo_filter != "All":
-            filtered = [p for p in filtered if p.silo.value == silo_filter]
-        st.caption("Positions from latest broker holdings snapshots (as-of from Accounts).")
-    else:
-        filtered = repo.list_positions(
-            silo=None if silo_filter == "All" else silo_filter,
-            status=None if status_filter == "All" else status_filter,
-        )
-    filtered = [p for p in filtered if (p.underlying or "").strip()]
-    if status_filter != "All":
-        filtered = [p for p in filtered if p.status.value == status_filter]
-
-    if not filtered:
-        st.info("No positions match. Import broker CSVs to get started.")
-    else:
-        cfg = settings.sizing
-        overrides = {
-            (o.symbol, o.silo.value): o for o in repo.list_position_overrides()
-        }
-        rows = []
-        for p in filtered:
-            silo_state = book.stock_options if p.silo == Silo.STOCK_OPTIONS else book.futures
-            pos_heat = p.total_dollar_risk / silo_state.equity if silo_state.equity > 0 else 0.0
-            pos_lev = p.current_delta_notional / silo_state.equity if silo_state.equity > 0 else 0.0
-            stop_set = has_stop(p, repo)
-            rows.append(
-                {
-                    "underlying": p.underlying,
-                    "accounts": stock_account_breakdown(p),
-                    "silo": p.silo.value,
-                    "direction": p.direction.value,
-                    "status": p.status.value,
-                    "total_risk": p.total_dollar_risk,
-                    "open_r": round(p.open_r, 2) if p.open_r is not None else None,
-                    "no_stop": "⚠ no stop" if not stop_set and p.status.value == "open" else "",
-                    "pos_heat": pos_heat,
-                    "notional": p.current_delta_notional,
-                    "pos_leverage": pos_lev,
-                    "premium_at_risk": p.premium_at_risk,
-                    "stop_risk": p.stop_risk,
-                    "realized_pnl": p.realized_pnl,
-                    "epoch": p.epoch_id,
-                    "governor": book.effective_governor.state.value,
-                }
-            )
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-        open_positions = [p for p in filtered if p.status.value == "open"]
-        if open_positions:
-            st.subheader("Edit stops (stock positions)")
-            st.caption("Stops feed portfolio heat and open-R. Options use premium-at-risk automatically.")
-            stop_rows = []
-            for p in open_positions:
-                ov = overrides.get((p.underlying, p.silo.value))
-                stop_rows.append(
-                    {
-                        "underlying": p.underlying,
-                        "silo": p.silo.value,
-                        "initial_stop": ov.initial_stop if ov else None,
-                        "current_stop": ov.current_stop if ov else None,
-                    }
-                )
-            stop_df = pd.DataFrame(stop_rows)
-            edited = st.data_editor(
-                stop_df,
-                num_rows="fixed",
-                column_config={
-                    "initial_stop": st.column_config.NumberColumn("Initial stop", format="%.2f"),
-                    "current_stop": st.column_config.NumberColumn("Current stop", format="%.2f"),
-                },
-                key="position_stops_editor",
-            )
-            if st.button("Save stops", key="save_position_stops"):
-                for _, row in edited.iterrows():
-                    init = row["initial_stop"]
-                    curr = row["current_stop"]
-                    if init is not None or curr is not None:
-                        repo.upsert_position_override(
-                            symbol=str(row["underlying"]),
-                            silo=Silo(row["silo"]),
-                            initial_stop=float(init) if init is not None and not pd.isna(init) else None,
-                            current_stop=float(curr) if curr is not None and not pd.isna(curr) else None,
-                        )
-                get_repository.clear()
-                st.success("Stops saved — heat and open-R will update on refresh.")
-                st.rerun()
-
-        if status_filter in ("open", "All"):
-            open_by_silo = (
-                df[df["status"] == "open"]
-                .groupby("silo")
-                .agg(
-                    risk=("total_risk", "sum"),
-                    notional=("notional", "sum"),
-                )
-            )
-            if not open_by_silo.empty:
-                st.subheader("Silo totals vs caps")
-                cap_rows = []
-                for silo_name in open_by_silo.index:
-                    state = book.stock_options if silo_name == "stock_options" else book.futures
-                    cap_rows.append(
-                        {
-                            "silo": silo_name,
-                            "open_risk": state.open_dollar_risk,
-                            "heat": state.heat,
-                            "heat_cap": cfg.heat_cap,
-                            "heat_status": cap_status_pct(state.heat, cfg.heat_cap),
-                            "notional": state.open_delta_notional,
-                            "leverage": state.leverage,
-                            "leverage_cap": cfg.leverage_cap,
-                            "lev_status": cap_status_pct(state.leverage, cfg.leverage_cap),
-                            "drawdown": state.drawdown_pct,
-                            "governor": state.governor.state.value,
-                        }
-                    )
-                st.dataframe(pd.DataFrame(cap_rows), use_container_width=True, hide_index=True)
-
-elif page == "Alpha Left on Table":
-    st.header("Alpha Left on the Table")
-    st.caption("Counterfactual sizing replay — entry/exit timing fixed (PRD §7.6)")
-
-    from trading_architect.engines.evaluation import CounterfactualRule, evaluate_alpha_left
-
-    rule_labels = {
-        "1% fractional risk": CounterfactualRule.FRACTIONAL_1PCT,
-        "2% fractional risk": CounterfactualRule.FRACTIONAL_2PCT,
-        "¼ Kelly": CounterfactualRule.KELLY_QUARTER,
-        "⅓ Kelly": CounterfactualRule.KELLY_THIRD,
-        "½ Kelly": CounterfactualRule.KELLY_HALF,
-    }
-    selected_rule_label = st.selectbox("Counterfactual rule", list(rule_labels.keys()))
-    selected_rule = rule_labels[selected_rule_label]
-
-    st.caption(
-        f"Starting equity — stock/options ${settings.starting_equity_stock_options:,.0f}, "
-        f"futures ${settings.starting_equity_futures:,.0f} (edit in Settings)"
-    )
-
-    if not events:
-        st.info("Import broker CSVs first.")
-    else:
-        report = evaluate_alpha_left(events, starting_equity=settings.starting_equity())
-
-        summary_rows = []
-        for seg in report.segments:
-            if seg.rule != selected_rule:
-                continue
-            summary_rows.append(
-                {
-                    "silo": seg.silo.value,
-                    "epoch": seg.epoch_id,
-                    "trades": seg.trade_count,
-                    "actual_pnl": seg.total_actual_pnl,
-                    "counterfactual_pnl": seg.total_counterfactual_pnl,
-                    "alpha_left": seg.alpha_left_on_table,
-                }
-            )
-
-        if summary_rows:
-            st.subheader("Summary")
-            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-
-            for seg in report.segments:
-                if seg.rule != selected_rule:
-                    continue
-                if seg.r_distribution:
-                    rd = seg.r_distribution
-                    st.subheader(f"R-distribution — {seg.silo.value} / {seg.epoch_id}")
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Trades", rd.count)
-                    m2.metric("Expectancy", f"{rd.expectancy:.2f}R")
-                    m3.metric("Win rate", f"{rd.win_rate:.0%}")
-                    m4.metric("Optimal-f", f"{rd.optimal_f:.3f}")
-                    st.write(
-                        f"Mean {rd.mean_r:.2f}R · Std {rd.std_r:.2f} · Skew {rd.skew:.2f} · "
-                        f"P5/P95 {rd.p05_r:.2f}/{rd.p95_r:.2f}R"
-                    )
-                if seg.options_winner_analysis:
-                    st.info(seg.options_winner_analysis.narrative)
-
-            drill = [
-                seg for seg in report.segments if seg.rule == selected_rule and seg.contributions
-            ]
-            if drill and st.checkbox("Show per-trade drill-down"):
-                for seg in drill:
-                    st.write(f"**{seg.silo.value} / {seg.epoch_id}**")
-                    contrib_rows = [
-                        {
-                            "underlying": c.underlying,
-                            "symbol": c.symbol,
-                            "opened": c.opened_at[:10],
-                            "actual_pnl": c.actual_pnl,
-                            "cf_pnl": c.counterfactual_pnl,
-                            "alpha_left": c.alpha_left,
-                            "R": c.realized_r,
-                            "risk_basis": c.risk_basis,
-                        }
-                        for c in seg.contributions
-                    ]
-                    st.dataframe(
-                        pd.DataFrame(contrib_rows), use_container_width=True, hide_index=True
-                    )
-        else:
-            st.info("No closed trades found for evaluation.")
-
-elif page == "Edge & Risk Review":
-    st.header("Edge & Risk Review")
-    st.caption("Bootstrap edge estimates and confidence-gated recommendations (PRD §7.4)")
-
-    from trading_architect.engines.adaptive_risk import RiskAction, build_risk_review
-
-    live = settings.sizing
-    st.caption(
-        f"Current base f **{live.base_risk_f:.2%}** · Kelly **{live.kelly_fraction:.0%}** · "
-        f"drawdown **{book.effective_drawdown_pct:.1%}** "
-        f"(edit live f under Settings → Sizing & caps)"
-    )
-
-    if not events:
-        st.info("Import broker CSVs first.")
-    else:
-        report = build_risk_review(
-            events,
-            config=settings.adaptive_risk,
-            sizing=settings.sizing,
-            drawdown_pct=book.effective_drawdown_pct,
-        )
-
-        if report.post_epoch_id:
-            st.caption(f"Step-up decisions use post-change epoch: `{report.post_epoch_id}`")
-
-        for rec in report.recommendations:
-            st.subheader(rec.silo.value.replace("_", " + ").title())
-            action_colors = {
-                RiskAction.STEP_UP_KELLY: "success",
-                RiskAction.STEP_UP_BASE_F: "success",
-                RiskAction.DE_RISK: "error",
-                RiskAction.INSUFFICIENT_DATA: "warning",
-                RiskAction.HOLD: "info",
-            }
-            msg_fn = getattr(st, action_colors.get(rec.action, "info"))
-            msg_fn(rec.narrative)
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Action", rec.action.value.replace("_", " "))
-            m2.metric("Effective f", f"{rec.effective_risk_f:.2%}")
-            m3.metric(
-                "Kelly", f"{rec.current_kelly_fraction:.0%} → {rec.recommended_kelly_fraction:.0%}"
-            )
-            m4.metric("Base f", f"{rec.current_base_f:.2%} → {rec.recommended_base_f:.2%}")
-
-            if rec.withhold_reason:
-                st.warning(rec.withhold_reason)
-            for w in rec.warnings:
-                st.warning(w)
-
-            with st.expander("Statistics"):
-                st.text(rec.statistics)
-
-        if report.epoch_segments:
-            st.subheader("Epoch-segmented edge")
-            seg_rows = []
-            for seg in report.epoch_segments:
-                rd = seg.r_distribution
-                seg_rows.append(
-                    {
-                        "silo": seg.silo.value,
-                        "epoch": seg.epoch_id,
-                        "trades": seg.trade_count,
-                        "expectancy": round(rd.expectancy, 2) if rd else None,
-                        "win_rate": f"{rd.win_rate:.0%}" if rd else None,
-                        "optimal_f": round(seg.optimal_f_ci.point, 3) if seg.optimal_f_ci else None,
-                        "optimal_f_lower": round(seg.optimal_f_ci.lower, 3)
-                        if seg.optimal_f_ci
-                        else None,
-                        "step_up_ready": seg.sufficient_for_step_up,
-                    }
-                )
-            st.dataframe(pd.DataFrame(seg_rows), use_container_width=True, hide_index=True)
-
-elif page == "Review Queue":
-    st.header("Review Queue")
-    items = repo.list_review_queue()
-    if not items:
-        st.success("Review queue is empty.")
-    else:
-        for item in items[:50]:
-            with st.expander(f"{item.source_file} row {item.row_index}: {item.reason}"):
-                st.json(item.raw_row)
 
 elif page == "Settings":
     st.header("Settings")

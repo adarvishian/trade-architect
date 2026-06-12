@@ -40,7 +40,7 @@ ta options --chain path/to/chain.csv --underlying NVDA --spot 200 --target 210 \
 ta options --source schwab --underlying NVDA --target 210 \
   --hold-days 60 --direction long_call --equity 100000 --save-snapshot
 
-# Launch UI
+# Launch UI (4 pages: Dashboard, Size a Trade, Accounts, Settings)
 streamlit run app/streamlit_app.py
 ```
 
@@ -78,7 +78,16 @@ Refresh tokens expire after **7 days** — re-run `--login` when prompted.
 | `ta marks [--silo stock_options\|futures\|all]` | Preview live marks (Streamer + REST fallback) |
 | `ta options --source schwab --underlying NVDA …` | Fetch live option chain for the selector |
 
-The Streamlit app mirrors this under **Import Data → Schwab API** (portfolio snapshot, transaction import) and **Option Selector → Fetch live chain (Schwab)**. Settings shows connection status, token expiry countdown, and account label↔hash mapping.
+The Streamlit app mirrors this under **Accounts → Backfill history** (Schwab portfolio snapshot, transaction import). **Size a Trade** includes the options contract selector when asset type is option. Settings shows connection status, token expiry countdown, and account label↔hash mapping.
+
+### App pages (rebuild Phase 3)
+
+| Page | Purpose |
+|------|---------|
+| **Dashboard** | Four blocks: where am I, where is risk, what can I allocate, what per trade. Folds positions, sizing efficiency, edge review, and adherence. |
+| **Size a Trade** | Six-layer sizing + option contract selector branch |
+| **Accounts** | Linked accounts, manual balances, review queue, CSV/API backfill for evaluation |
+| **Settings** | Equity fallback, cashflow, sizing caps, epochs |
 
 **Scope limits (by design):** marks, balances, positions, and transaction history only — no order placement or money movement.
 
@@ -95,6 +104,17 @@ ta fetch-robinhood-portfolio
 ```
 
 ## Development phases
+
+### Rebuild roadmap (account-first)
+
+| Phase | Status | Scope |
+|-------|--------|-------|
+| P1 — Truth | Done | Accounts, snapshots, auto-sync, holdings-first positions |
+| P2 — Capital | Done | Cashflow, deployable capital, projections, stops, adherence groundwork |
+| P3 — Surface | Done | 4-block dashboard, page folds, deposit detection, dead code cuts |
+| P4 — Edge & awareness | Planned | TWR vs SPY, concentration stress, earnings flags, exit efficiency |
+
+Full spec: [`Audit - Feature Utility & Rebuild Roadmap.md`](Audit%20-%20Feature%20Utility%20%26%20Rebuild%20Roadmap.md).
 
 ### Core product (PRD §9)
 
@@ -151,7 +171,7 @@ pip install -e ".[dev,schwab]"   # or use requirements.lock.txt (see Quick start
 ruff check .                     # lint
 ruff format --check .            # format check
 ruff format .                    # apply formatting
-pytest -q                        # 169 tests, no live network
+pytest -q                        # 245+ tests, no live network
 ```
 
 Regenerate the lockfile after changing dependencies in `pyproject.toml`:
