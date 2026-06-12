@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from trading_architect.assembly.positions import futures_multiplier
 from trading_architect.config.defaults import OPTION_CONTRACT_MULTIPLIER
+from trading_architect.engines.marks import MarksProvider, default_marks_provider
 from trading_architect.models.entities import Direction, Position
 from trading_architect.store.repository import PositionOverrideRecord, Repository
 
@@ -15,6 +16,13 @@ def _stock_leg_symbol(position: Position) -> str | None:
     return None
 
 
+def _underlying_symbol(position: Position) -> str | None:
+    sym = _stock_leg_symbol(position)
+    if sym:
+        return sym
+    return position.underlying
+
+
 def _avg_entry_for_stock(position: Position) -> float | None:
     sym = _stock_leg_symbol(position)
     if sym is None:
@@ -22,17 +30,27 @@ def _avg_entry_for_stock(position: Position) -> float | None:
     return position.blended_cost_basis.get(sym)
 
 
-def _current_mark_for_stock(position: Position) -> float | None:
-    """Use delta-notional / qty as mark proxy when enriched."""
-    sym = _stock_leg_symbol(position)
+def _current_mark_for_stock(
+    position: Position,
+    marks_provider: MarksProvider | None = None,
+) -> float | None:
+    """Use underlying mark when stock leg exists; avoid blended delta-notional proxy."""
+    sym = _underlying_symbol(position)
     if sym is None:
         return None
-    qty = position.leg_net_qty.get(sym, 0)
-    if qty == 0:
-        return None
-    if position.current_delta_notional and abs(qty) > 0:
+    stock_sym = _stock_leg_symbol(position)
+    qty = position.leg_net_qty.get(stock_sym, 0) if stock_sym else 0
+    if stock_sym and qty != 0 and position.current_delta_notional and abs(qty) > 0:
         return abs(position.current_delta_notional / qty)
-    return position.blended_cost_basis.get(sym)
+
+    provider = marks_provider or default_marks_provider()
+    marks = provider.marks_for([sym])
+    mark_obj = marks.get(sym)
+    if mark_obj is not None and mark_obj.price is not None:
+        return float(mark_obj.price)
+    if stock_sym:
+        return position.blended_cost_basis.get(stock_sym)
+    return None
 
 
 def compute_stop_risk(
@@ -45,7 +63,7 @@ def compute_stop_risk(
 
     sym = _stock_leg_symbol(position)
     if sym is None:
-        return position.premium_at_risk
+        return 0.0
 
     qty = position.leg_net_qty.get(sym, 0)
     if qty == 0:
@@ -56,16 +74,50 @@ def compute_stop_risk(
     return abs(qty) * abs(avg_entry - override.initial_stop) * mult
 
 
+def _option_open_r(
+    position: Position,
+    marks_provider: MarksProvider | None = None,
+) -> float | None:
+    option_legs = [
+        (sym, qty, position.blended_cost_basis.get(sym, 0.0))
+        for sym, qty in position.leg_net_qty.items()
+        if "_" in sym and qty != 0
+    ]
+    if not option_legs:
+        return None
+
+    provider = marks_provider or default_marks_provider()
+    symbols = [sym for sym, _, _ in option_legs]
+    marks = provider.marks_for(symbols)
+
+    total_cost = 0.0
+    total_mtm = 0.0
+    for sym, qty, cost_per_share in option_legs:
+        premium = abs(cost_per_share) * abs(qty) * OPTION_CONTRACT_MULTIPLIER
+        total_cost += premium
+        mark_obj = marks.get(sym)
+        mark = mark_obj.price if mark_obj else None
+        if mark is None:
+            mark = abs(cost_per_share)
+        total_mtm += float(mark) * abs(qty) * OPTION_CONTRACT_MULTIPLIER
+
+    if total_cost <= 0:
+        return None
+    return (total_mtm - total_cost) / total_cost
+
+
 def compute_open_r(
     position: Position,
     override: PositionOverrideRecord | None,
+    *,
+    marks_provider: MarksProvider | None = None,
 ) -> float | None:
     """Open R-multiple vs initial stop (direction-aware). Options use premium as R basis."""
     sym = _stock_leg_symbol(position)
 
     if sym is not None and override and override.initial_stop is not None:
         avg_entry = position.blended_cost_basis.get(sym, 0.0)
-        mark = _current_mark_for_stock(position)
+        mark = _current_mark_for_stock(position, marks_provider)
         if mark is None or avg_entry == override.initial_stop:
             return None
         r_distance = avg_entry - override.initial_stop
@@ -75,20 +127,8 @@ def compute_open_r(
             return (mark - avg_entry) / r_distance
         return (avg_entry - mark) / (override.initial_stop - avg_entry)
 
-    if position.premium_at_risk > 0 and position.current_delta_notional:
-        option_legs = [
-            (sym, qty, position.blended_cost_basis.get(sym, 0.0))
-            for sym, qty in position.leg_net_qty.items()
-            if "_" in sym and qty > 0
-        ]
-        if not option_legs:
-            return None
-        total_cost = sum(abs(cost) * abs(qty) * OPTION_CONTRACT_MULTIPLIER for _, qty, cost in option_legs)
-        if total_cost <= 0:
-            return None
-        mtm = sum(position.leg_net_qty.get(s, 0) * position.blended_cost_basis.get(s, 0.0) for s in position.leg_net_qty if "_" in s)
-        unrealized = position.current_delta_notional - abs(mtm) * OPTION_CONTRACT_MULTIPLIER if mtm else 0.0
-        return unrealized / total_cost
+    if position.premium_at_risk > 0:
+        return _option_open_r(position, marks_provider)
 
     return None
 
@@ -96,6 +136,8 @@ def compute_open_r(
 def apply_position_overrides(
     positions: list[Position],
     repo: Repository,
+    *,
+    marks_provider: MarksProvider | None = None,
 ) -> list[Position]:
     """Enrich positions with stop overrides, stop_risk, open_r, and total_dollar_risk."""
     overrides = {(o.symbol, o.silo): o for o in repo.list_position_overrides()}
@@ -110,7 +152,7 @@ def apply_position_overrides(
                 override = overrides.get((stock_sym, pos.silo))
 
         stop_risk = compute_stop_risk(pos, override)
-        open_r = compute_open_r(pos, override)
+        open_r = compute_open_r(pos, override, marks_provider=marks_provider)
         total_risk = pos.premium_at_risk + stop_risk
 
         enriched.append(
