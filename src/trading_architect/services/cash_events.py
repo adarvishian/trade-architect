@@ -34,10 +34,6 @@ def detect_cash_jump(
     if prior_cash > 0 and abs(delta) / prior_cash < min_pct:
         return None
 
-    pending = repo.list_cash_events(classification="pending", account_id=account_id)
-    if pending:
-        return None
-
     return repo.record_cash_event(
         CashEventRecord(
             account_id=account_id,
@@ -62,10 +58,16 @@ def pending_cash_events(repo: Repository) -> list[CashEventRecord]:
     return repo.list_cash_events(classification="pending")
 
 
-def trading_equity_adjustment(repo: Repository, silo, raw_equity: float) -> float:
+def trading_equity_adjustment(
+    repo: Repository,
+    silo,
+    raw_equity: float,
+    *,
+    as_of: datetime | None = None,
+) -> float:
     """Equity net of classified deposits/withdrawals for drawdown governor."""
     from trading_architect.models.entities import Silo
 
     if not isinstance(silo, Silo):
         silo = Silo(silo)
-    return raw_equity - repo.net_cashflow_adjustment_for_silo(silo)
+    return raw_equity - repo.net_cashflow_adjustment_for_silo(silo, as_of=as_of)
