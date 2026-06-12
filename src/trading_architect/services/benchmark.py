@@ -25,17 +25,16 @@ def parse_fundamental_earnings(data: dict, underlying: str) -> date | None:
     """Extract next earnings date from Schwab quote/fundamental payload when present."""
     block = data.get(underlying.upper()) or data.get(underlying) or {}
     fundamental = block.get("fundamental") or {}
-    for key in ("nextEarningsDate", "nextDividendExDate", "divExDate"):
-        raw = fundamental.get(key)
-        if not raw:
-            continue
-        try:
-            if isinstance(raw, str):
-                if "T" in raw:
-                    return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
-                return date.fromisoformat(raw[:10])
-        except ValueError:
-            continue
+    raw = fundamental.get("nextEarningsDate")
+    if not raw:
+        return None
+    try:
+        if isinstance(raw, str):
+            if "T" in raw:
+                return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+            return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
     return None
 
 
@@ -61,6 +60,23 @@ def fetch_spy_close(*, client=None) -> float | None:
     return parse_spy_close_from_quotes(data)
 
 
+def _quote_fields(client) -> object | str | None:
+    quote_cls = getattr(client, "Quote", None)
+    if quote_cls is None:
+        return "quote,fundamental"
+    fields = getattr(quote_cls, "Fields", None)
+    if fields is None:
+        return "quote,fundamental"
+    for name in ("QUOTE", "FUNDAMENTAL"):
+        val = getattr(fields, name, None)
+        if val is not None:
+            other = getattr(fields, "FUNDAMENTAL" if name == "QUOTE" else "QUOTE", None)
+            if other is not None and hasattr(fields, "__or__"):
+                return val | other
+            return val
+    return "quote,fundamental"
+
+
 def fetch_earnings_date_schwab(underlying: str, *, client=None) -> date | None:
     """Try Schwab fundamentals block for next earnings date."""
     from trading_architect.ingestion.schwab_auth import get_client
@@ -71,10 +87,14 @@ def fetch_earnings_date_schwab(underlying: str, *, client=None) -> date | None:
     getter = getattr(client, "get_quotes", None)
     if getter is None:
         return None
+    fields = _quote_fields(client)
     try:
-        resp = getter([sym], fields="quote,fundamental")
-    except TypeError:
-        resp = getter([sym])
+        resp = getter([sym], fields=fields)
+    except (TypeError, ValueError):
+        try:
+            resp = getter([sym])
+        except Exception:
+            return None
     try:
         data = _raise_for_response(resp, f"fundamentals for {sym}")
     except Exception:

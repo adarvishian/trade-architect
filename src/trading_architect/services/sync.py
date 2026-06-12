@@ -46,6 +46,14 @@ def _age_message(as_of: datetime | None) -> str:
     return f"last synced {days}d ago"
 
 
+def _status_for_snapshot(as_of: datetime | None, ttl_min: int) -> tuple[SyncStatus, str]:
+    if as_of is None:
+        return "stale", "no snapshot yet"
+    if not _snapshot_fresh(as_of, ttl_min):
+        return "stale", _age_message(as_of)
+    return "ok", "within TTL"
+
+
 def _sync_schwab_accounts(
     repo: Repository,
     ttl_min: int,
@@ -83,12 +91,13 @@ def _sync_schwab_accounts(
         for label in labels:
             acct = repo.get_account_by_label(label)
             as_of = repo.latest_balance(acct.id).as_of if acct else None
+            status, message = _status_for_snapshot(as_of, ttl_min)
             results.append(
                 SyncResult(
                     account_label=label,
-                    status="ok",
+                    status=status,
                     as_of=as_of,
-                    message="within TTL",
+                    message=message,
                 )
             )
         return results
@@ -200,12 +209,14 @@ def _sync_robinhood_accounts(
     if not stale and rh_accounts:
         for acct in rh_accounts:
             bal = repo.latest_balance(acct.id)
+            as_of = bal.as_of if bal else None
+            status, message = _status_for_snapshot(as_of, ttl_min)
             results.append(
                 SyncResult(
                     account_label=acct.label,
-                    status="ok",
-                    as_of=bal.as_of if bal else None,
-                    message="within TTL",
+                    status=status,
+                    as_of=as_of,
+                    message=message,
                 )
             )
         return results
@@ -254,19 +265,29 @@ def _sync_robinhood_accounts(
     return results
 
 
-def _manual_account_results(repo: Repository, accounts: list[AccountRecord]) -> list[SyncResult]:
+def _manual_account_results(
+    repo: Repository,
+    accounts: list[AccountRecord],
+    ttl_min: int,
+) -> list[SyncResult]:
     results: list[SyncResult] = []
     for acct in accounts:
         if acct.kind != "manual":
             continue
         bal = repo.latest_balance(acct.id)
         as_of = bal.as_of if bal else None
+        if as_of is None or not _snapshot_fresh(as_of, ttl_min):
+            status: SyncStatus = "stale"
+            message = _age_message(as_of) if as_of else "manual entry — no snapshot"
+        else:
+            status = "ok"
+            message = _age_message(as_of)
         results.append(
             SyncResult(
                 account_label=acct.label,
-                status="ok",
+                status=status,
                 as_of=as_of,
-                message=_age_message(as_of) if as_of else "manual entry",
+                message=message,
             )
         )
     return results
@@ -288,5 +309,5 @@ def sync_all(
     results: list[SyncResult] = []
     results.extend(_sync_schwab_accounts(repo, ttl, force=force))
     results.extend(_sync_robinhood_accounts(repo, ttl, session_active=session_active, force=force))
-    results.extend(_manual_account_results(repo, repo.list_accounts()))
+    results.extend(_manual_account_results(repo, repo.list_accounts(), ttl))
     return results

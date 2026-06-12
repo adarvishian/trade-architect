@@ -45,6 +45,40 @@ def _mfe_mae_r(
     return mfe, mae
 
 
+def _marks_for_entry(repo: Repository, entry: ClosedTradeEntry) -> list[tuple[datetime, float]]:
+    symbols = [entry.symbol]
+    if entry.asset_type == AssetType.OPTION and entry.underlying not in symbols:
+        symbols.append(entry.underlying)
+    for sym in symbols:
+        marks = repo.holdings_mark_history(
+            sym,
+            since=entry.opened_at,
+            until=entry.closed_at,
+        )
+        if marks:
+            return marks
+    return []
+
+
+def _row_from_entry(repo: Repository, entry: ClosedTradeEntry) -> ExitEfficiencyRow | None:
+    marks = _marks_for_entry(repo, entry)
+    if not marks:
+        return None
+    mfe_r, _ = _mfe_mae_r(entry, marks)
+    exit_r = entry.realized_r
+    capture = None
+    if mfe_r is not None and mfe_r > 0 and exit_r is not None:
+        capture = min(exit_r / mfe_r, 1.5)
+    return ExitEfficiencyRow(
+        underlying=entry.underlying,
+        symbol=entry.symbol,
+        closed_at=entry.closed_at,
+        exit_r=exit_r,
+        max_r_reached=mfe_r,
+        mfe_capture_pct=capture,
+    )
+
+
 def exit_efficiency_report(
     repo: Repository,
     *,
@@ -53,41 +87,19 @@ def exit_efficiency_report(
     events = repo.list_events()
     closed = extract_closed_entries(events)
     closed.sort(key=lambda e: e.closed_at, reverse=True)
-    closed = closed[:limit]
 
     rows: list[ExitEfficiencyRow] = []
     captures: list[float] = []
 
     for entry in closed:
-        if entry.asset_type == AssetType.OPTION:
+        row = _row_from_entry(repo, entry)
+        if row is None:
             continue
-        marks = repo.holdings_mark_history(
-            entry.symbol,
-            since=entry.opened_at,
-            until=entry.closed_at,
-        )
-        if not marks:
-            marks = repo.holdings_mark_history(
-                entry.underlying,
-                since=entry.opened_at,
-                until=entry.closed_at,
-            )
-        mfe_r, _ = _mfe_mae_r(entry, marks)
-        exit_r = entry.realized_r
-        capture = None
-        if mfe_r is not None and mfe_r > 0 and exit_r is not None:
-            capture = min(exit_r / mfe_r, 1.5)
-            captures.append(capture)
-        rows.append(
-            ExitEfficiencyRow(
-                underlying=entry.underlying,
-                symbol=entry.symbol,
-                closed_at=entry.closed_at,
-                exit_r=exit_r,
-                max_r_reached=mfe_r,
-                mfe_capture_pct=capture,
-            )
-        )
+        rows.append(row)
+        if row.mfe_capture_pct is not None:
+            captures.append(row.mfe_capture_pct)
+        if len(rows) >= limit:
+            break
 
     median = statistics.median(captures) if captures else None
     return ExitEfficiencyReport(

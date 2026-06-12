@@ -61,13 +61,17 @@ def _theta_for_symbol(symbol: str, marks: dict) -> float | None:
     return getattr(mark, "theta", None)
 
 
-def options_theta_day(positions: list[Position], marks_provider: MarksProvider) -> float:
+def options_theta_day(
+    positions: list[Position],
+    marks_provider: MarksProvider,
+) -> float | None:
     """Aggregate daily theta bleed: Σ theta × 100 × qty for long option legs."""
     symbols = _option_symbols(positions)
     if not symbols:
         return 0.0
     marks = marks_provider.marks_for(symbols)
     total = 0.0
+    missing = False
     for pos in positions:
         if pos.status != PositionStatus.OPEN:
             continue
@@ -75,8 +79,12 @@ def options_theta_day(positions: list[Position], marks_provider: MarksProvider) 
             if qty <= 0 or "_" not in sym:
                 continue
             theta = _theta_for_symbol(sym, marks)
-            if theta is not None:
-                total += theta * OPTION_CONTRACT_MULTIPLIER * qty
+            if theta is None:
+                missing = True
+                continue
+            total += theta * OPTION_CONTRACT_MULTIPLIER * qty
+    if missing and total == 0.0:
+        return None
     return total
 
 
@@ -199,13 +207,13 @@ def concentration_clusters(
     positions: list[Position],
     repo,
 ) -> list[tuple[str, float]]:
-    """Group open positions by sector tag; return (cluster, delta notional) sorted desc."""
+    """Group open positions by sector tag; return (cluster, |delta notional|) sorted desc."""
     by_cluster: dict[str, float] = {}
     for pos in positions:
         if pos.status != PositionStatus.OPEN:
             continue
         label = _cluster_label(pos.underlying, repo)
-        by_cluster[label] = by_cluster.get(label, 0.0) + pos.current_delta_notional
+        by_cluster[label] = by_cluster.get(label, 0.0) + abs(pos.current_delta_notional)
     return sorted(by_cluster.items(), key=lambda x: x[1], reverse=True)
 
 

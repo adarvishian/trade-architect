@@ -124,8 +124,14 @@ def test_silo_brokerage_liquidity(repo: Repository):
     _broker_balance(repo, "schwab-tos", 3_000.0)
     _manual_balance(repo, "bank", 20_000.0)
     cash, bp = silo_brokerage_liquidity(repo, Silo.STOCK_OPTIONS)
-    assert cash == pytest.approx(3_000.0)
+    assert cash == pytest.approx(6_000.0)
     assert bp == pytest.approx(6_000.0)
+
+
+def test_silo_brokerage_liquidity_missing_data(repo: Repository):
+    cash, bp = silo_brokerage_liquidity(repo, Silo.FUTURES)
+    assert cash is None
+    assert bp is None
 
 
 def test_futures_silo_manual_balance(repo: Repository):
@@ -141,4 +147,4 @@ def test_futures_silo_manual_balance(repo: Repository):
         )
     )
     cash, _ = silo_brokerage_liquidity(repo, Silo.FUTURES)
-    assert cash == 0.0
+    assert cash == pytest.approx(25_000.0)

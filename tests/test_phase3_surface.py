@@ -14,6 +14,7 @@ from trading_architect.services.dashboard_metrics import (
     expiry_runway_premium,
     standard_dollar_risk,
 )
+from trading_architect.services.snapshot_persist import persist_manual_balance
 from trading_architect.store.database import Database
 from trading_architect.store.repository import (
     BalanceSnapshotRecord,
@@ -28,25 +29,28 @@ def repo(tmp_path) -> Repository:
 
 
 def test_detect_cash_jump_queues_pending(repo: Repository):
-    acct = repo.upsert_account(kind="manual", label="bank", silo=Silo.STOCK_OPTIONS)
+    repo.upsert_account(kind="manual", label="bank", silo=Silo.STOCK_OPTIONS)
     t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    repo.record_balance_snapshot(
-        BalanceSnapshotRecord(
-            account_id=acct.id,
-            as_of=t0,
-            cash=10_000.0,
-            equity_value=10_000.0,
-            buying_power=10_000.0,
-            source="manual",
-        )
+    persist_manual_balance(
+        repo,
+        label="bank",
+        silo=Silo.STOCK_OPTIONS,
+        institution="Chase",
+        equity_value=10_000.0,
+        as_of=t0,
     )
     t1 = datetime(2026, 6, 2, tzinfo=timezone.utc)
-    event = detect_cash_jump(repo, account_id=acct.id, new_cash=15_000.0, as_of=t1)
-    assert event is not None
-    assert event.classification == "pending"
-    assert event.delta == pytest.approx(5_000.0)
+    persist_manual_balance(
+        repo,
+        label="bank",
+        silo=Silo.STOCK_OPTIONS,
+        institution="Chase",
+        equity_value=15_000.0,
+        as_of=t1,
+    )
     pending = repo.list_cash_events(classification="pending")
     assert len(pending) == 1
+    assert pending[0].delta == pytest.approx(5_000.0)
 
 
 def test_detect_cash_jump_skips_small_change(repo: Repository):

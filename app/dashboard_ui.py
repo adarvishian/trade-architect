@@ -101,7 +101,7 @@ def render_dashboard(
         acct_rows = []
         for card in cards:
             sync = sync_results.get(card["label"])
-            status = sync.status if sync else "ok"
+            status = sync.status if sync else "stale"
             acct_rows.append(
                 {
                     "account": card["label"],
@@ -121,7 +121,7 @@ def render_dashboard(
     cfg = settings.sizing
     r1, r2, r3, r4 = st.columns(4)
     so = book.stock_options
-    r1.metric("Open heat", f"${so.open_dollar_risk:,.0f}", f"{so.heat:.0%} of cap")
+    r1.metric("Open heat", f"${so.open_dollar_risk:,.0f}", f"{so.heat:.0%} of equity")
     cal = slippage_calibration(repo)
     if holdings:
         raw_stop, adj_stop = portfolio_slippage_adjusted_heat(holdings, repo, cal)
@@ -139,7 +139,11 @@ def render_dashboard(
     theta = options_theta_day(holdings, marks_provider) if holdings else 0.0
     runway = expiry_runway_premium(holdings) if holdings else None
     t1, t2 = st.columns(2)
-    t1.metric("Options theta bleed", f"${theta:,.0f}/day")
+    if theta is None:
+        t1.metric("Options theta bleed", "—")
+        t1.caption("⚠ Marks unavailable — theta not shown")
+    else:
+        t1.metric("Options theta bleed", f"${theta:,.0f}/day")
     if runway and runway.total > 0:
         t2.caption(
             f"Premium at risk by DTE: <30d ${runway.under_30:,.0f} · "
@@ -174,12 +178,21 @@ def render_dashboard(
         if upcoming:
             for flag in upcoming:
                 legs = f", {flag.option_legs_held} calls/puts held" if flag.option_legs_held else ""
-                src = " (manual)" if flag.degraded else ""
+                src = " (manual)" if flag.source == "manual" else ""
                 st.caption(
                     f"📅 **{flag.underlying}** earnings in {flag.days_until}d{legs}{src}"
                 )
         elif any(f.degraded for f in flags):
             st.caption("Earnings dates: degraded — set manual dates in Settings.")
+
+    pending_unclassified = [
+        e for e in pending_cash_events(repo)
+    ]
+    if pending_unclassified:
+        st.warning(
+            f"**{len(pending_unclassified)} unclassified cash event(s)** — "
+            "deposits/withdrawals may distort TWR until classified."
+        )
 
     if holdings:
         risk_rows = position_risk_rows(holdings, repo)
@@ -283,6 +296,7 @@ def render_dashboard(
 def _render_twr_card(repo: Repository) -> None:
     report = twr_report(repo)
     st.markdown("**Performance vs SPY (TWR, net of deposits/withdrawals)**")
+    st.caption("SPY benchmark uses price return only (excl. dividends).")
 
     def _row(period) -> None:
         if not period.sufficient_history:
@@ -290,7 +304,7 @@ def _render_twr_card(repo: Repository) -> None:
             return
         c1, c2, c3 = st.columns(3)
         c1.metric(period.label, format_twr_pct(period.portfolio_twr))
-        c2.metric("SPY", format_twr_pct(period.benchmark_twr))
+        c2.metric("SPY (excl. div.)", format_twr_pct(period.benchmark_twr))
         if period.portfolio_twr is not None and period.benchmark_twr is not None:
             alpha = period.portfolio_twr - period.benchmark_twr
             c3.metric("vs SPY", format_twr_pct(alpha))

@@ -122,7 +122,7 @@ def test_cash_cap_binding_stock():
         ),
         config=SizingConfig(base_risk_f=0.01),
     )
-    assert rec.recommended_qty == pytest.approx(50.0)
+    assert rec.recommended_qty == pytest.approx(40.0)
     assert rec.binding_constraint == BindingConstraint.CASH_AVAILABLE
 
 

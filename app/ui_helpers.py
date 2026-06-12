@@ -58,6 +58,8 @@ def render_ops_banner(sync_results: list[SyncResult] | None = None) -> None:
             st.warning(f"**{result.account_label}** — auth required: {result.message}")
         elif result.status == "error":
             st.warning(f"**{result.account_label}** — sync error: {result.message}")
+        elif result.status == "stale":
+            st.warning(f"**{result.account_label}** — stale snapshot: {result.message}")
 
 
 def render_app_header() -> None:
@@ -116,7 +118,7 @@ def _governor_badge(state: DrawdownGovernorState) -> str:
     }[state]
 
 
-def render_governor_sidebar(book: BookContext) -> None:
+def render_governor_sidebar(book: BookContext, *, equity_as_of: str | None = None) -> None:
     """Always-visible drawdown governor (FR-7.4)."""
     st.sidebar.markdown("---")
     st.sidebar.subheader("Drawdown governor")
@@ -131,12 +133,13 @@ def render_governor_sidebar(book: BookContext) -> None:
     else:
         st.sidebar.caption("Within tolerance — full sizing available.")
 
+    as_of_note = f" · as of {equity_as_of}" if equity_as_of else ""
     for label, state in (
         ("Stock/options", book.stock_options),
         ("Futures", book.futures),
     ):
         st.sidebar.caption(
-            f"{label}: ${state.equity:,.0f} · DD {state.drawdown_pct:.1%} · "
+            f"{label}: ${state.equity:,.0f}{as_of_note} · DD {state.drawdown_pct:.1%} · "
             f"heat {state.heat:.0%}/{state.heat_cap:.0%} · lev {state.leverage:.1f}×/{state.leverage_cap:.1f}×"
         )
 

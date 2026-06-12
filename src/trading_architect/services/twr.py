@@ -55,7 +55,11 @@ def _benchmark_return(
 ) -> float | None:
     prices = repo.list_benchmark_prices(BENCHMARK_SYMBOL, since=start, until=end)
     if len(prices) < 2:
-        return None
+        all_prices = repo.list_benchmark_prices(BENCHMARK_SYMBOL)
+        in_window = [p for p in all_prices if start <= p.price_date <= end]
+        if len(in_window) < 2:
+            return None
+        prices = in_window
     p0 = prices[0].close_price
     p1 = prices[-1].close_price
     if p0 <= 0:

@@ -25,7 +25,7 @@ def repo(tmp_path) -> Repository:
     return Repository(Database(tmp_path / "sync_test.db"))
 
 
-def test_manual_account_always_ok(repo: Repository):
+def test_manual_account_stale_when_snapshot_old(repo: Repository):
     acct = repo.upsert_account(kind="manual", label="bank", silo=Silo.STOCK_OPTIONS)
     as_of = datetime(2026, 6, 1, tzinfo=timezone.utc)
     repo.record_balance_snapshot(
@@ -40,8 +40,26 @@ def test_manual_account_always_ok(repo: Repository):
     )
     results = sync_all(repo, ttl_min=15, rh_session_active=lambda: False)
     manual = next(r for r in results if r.account_label == "bank")
-    assert manual.status == "ok"
+    assert manual.status == "stale"
     assert manual.as_of == as_of
+
+
+def test_manual_account_ok_when_fresh(repo: Repository):
+    acct = repo.upsert_account(kind="manual", label="bank", silo=Silo.STOCK_OPTIONS)
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=5)
+    repo.record_balance_snapshot(
+        BalanceSnapshotRecord(
+            account_id=acct.id,
+            as_of=as_of,
+            cash=5_000.0,
+            equity_value=5_000.0,
+            buying_power=5_000.0,
+            source="manual",
+        )
+    )
+    results = sync_all(repo, ttl_min=15, rh_session_active=lambda: False)
+    manual = next(r for r in results if r.account_label == "bank")
+    assert manual.status == "ok"
 
 
 def test_schwab_skips_when_within_ttl(repo: Repository):

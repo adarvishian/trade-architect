@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from trading_architect.models.entities import Silo, TradeEvent
+from trading_architect.assembly.entries import extract_closed_entries
+from trading_architect.models.entities import AssetType, Silo, TradeEvent
 from trading_architect.store.repository import Repository, SizeRecommendationRecord
 
 DEFAULT_MATCH_DAYS = 5
@@ -21,6 +22,7 @@ class AdherenceMatch:
     ratio: float
     gap_cost: float
     fill_event_id: str | None
+    pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ def _first_fill_after(
     *,
     underlying: str,
     silo: Silo,
+    asset_type: str | None,
     since: datetime,
     within_days: int,
 ) -> TradeEvent | None:
@@ -46,6 +49,8 @@ def _first_fill_after(
             continue
         if event.silo != silo:
             continue
+        if asset_type and event.asset_type.value != asset_type:
+            continue
         ts = event.timestamp
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
@@ -54,11 +59,25 @@ def _first_fill_after(
     return None
 
 
-def _realized_per_unit_pnl(event: TradeEvent, taken_qty: float) -> float:
-    """Estimate per-unit P&L from a closing fill when available."""
-    if taken_qty == 0:
-        return 0.0
-    return event.price
+def _realized_per_unit_pnl(
+    fill: TradeEvent,
+    events: list[TradeEvent],
+) -> float | None:
+    """Per-unit realized P&L from a closed round-trip; None when still open."""
+    closed = extract_closed_entries(events)
+    for entry in closed:
+        if entry.underlying.upper() != fill.underlying.upper():
+            continue
+        if entry.silo != fill.silo:
+            continue
+        if entry.symbol != fill.symbol:
+            continue
+        qty = abs(entry.quantity)
+        if qty <= 0:
+            continue
+        mult = 100 if entry.asset_type == AssetType.OPTION else 1
+        return entry.realized_pnl / (qty * mult)
+    return None
 
 
 def match_recommendation(
@@ -74,6 +93,7 @@ def match_recommendation(
         events,
         underlying=rec.underlying,
         silo=rec.silo,
+        asset_type=rec.asset_type,
         since=since,
         within_days=within_days,
     )
@@ -81,8 +101,12 @@ def match_recommendation(
         return None
     taken_qty = abs(fill.quantity)
     ratio = taken_qty / rec.recommended_qty if rec.recommended_qty > 0 else 0.0
-    per_unit = _realized_per_unit_pnl(fill, taken_qty)
-    gap_cost = max(0.0, (rec.recommended_qty - taken_qty) * per_unit)
+    per_unit = _realized_per_unit_pnl(fill, events)
+    pending = per_unit is None
+    gap_cost = 0.0
+    if not pending and ratio < 1.0 and per_unit is not None:
+        shortfall = rec.recommended_qty - taken_qty
+        gap_cost = max(0.0, shortfall * per_unit) if shortfall > 0 else 0.0
     return AdherenceMatch(
         recommendation_id=rec.id or 0,
         underlying=rec.underlying,
@@ -92,6 +116,7 @@ def match_recommendation(
         ratio=ratio,
         gap_cost=gap_cost,
         fill_event_id=fill.event_id,
+        pending=pending,
     )
 
 
@@ -114,7 +139,7 @@ def adherence_summary(
             continue
         matches.append(match)
         ratios.append(min(match.ratio, 1.0))
-        if match.ratio < 1.0:
+        if not match.pending and match.ratio < 1.0:
             gap_total += match.gap_cost
 
     adherence_pct = sum(ratios) / len(ratios) if ratios else None
