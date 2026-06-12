@@ -37,6 +37,7 @@ class AppSettings:
     monthly_income_after_tax: float = 0.0
     monthly_expenses: float = 0.0
     cash_reserve_months: int = 6
+    cluster_stress_pct: float = -0.15
     sizing: SizingConfig = field(default_factory=lambda: SizingConfig())
     adaptive_risk: AdaptiveRiskConfig = field(default_factory=lambda: AdaptiveRiskConfig())
     option_selector: OptionSelectorConfig = field(default_factory=lambda: OptionSelectorConfig())
@@ -116,6 +117,7 @@ def app_settings_to_dict(settings: AppSettings) -> dict[str, Any]:
         "monthly_income_after_tax": settings.monthly_income_after_tax,
         "monthly_expenses": settings.monthly_expenses,
         "cash_reserve_months": settings.cash_reserve_months,
+        "cluster_stress_pct": settings.cluster_stress_pct,
         "sizing": sizing_config_to_dict(settings.sizing),
         "adaptive_risk": adaptive_config_to_dict(settings.adaptive_risk),
         "option_selector": option_selector_to_dict(settings.option_selector),
@@ -150,6 +152,9 @@ def app_settings_from_dict(data: dict[str, Any]) -> AppSettings:
         ),
         monthly_expenses=float(data.get("monthly_expenses", defaults.monthly_expenses)),
         cash_reserve_months=int(data.get("cash_reserve_months", defaults.cash_reserve_months)),
+        cluster_stress_pct=float(
+            data.get("cluster_stress_pct", defaults.cluster_stress_pct)
+        ),
         sizing=sizing,
         adaptive_risk=adaptive,
         option_selector=option_selector_from_dict(
@@ -190,6 +195,7 @@ def diff_app_settings(
         ),
         ("monthly_expenses", old.monthly_expenses, new.monthly_expenses),
         ("cash_reserve_months", old.cash_reserve_months, new.cash_reserve_months),
+        ("cluster_stress_pct", old.cluster_stress_pct, new.cluster_stress_pct),
     ]
     for name, old_val, new_val in scalar_fields:
         if old_val != new_val:

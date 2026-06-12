@@ -754,6 +754,14 @@ elif page == "Settings":
                 key="set_reserve_months",
             )
         )
+        draft.cluster_stress_pct = st.number_input(
+            "Cluster stress gap (%) — arithmetic scenario, not a forecast",
+            value=float(draft.cluster_stress_pct) * 100.0,
+            min_value=-50.0,
+            max_value=0.0,
+            step=1.0,
+            key="set_cluster_stress",
+        ) / 100.0
         net = draft.monthly_income_after_tax - draft.monthly_expenses
         reserve_amt = draft.cash_reserve_months * draft.monthly_expenses
         st.caption(
@@ -800,6 +808,32 @@ elif page == "Settings":
             min_value=5,
             step=1,
         )
+
+        with st.expander("Sector tags (concentration clusters)"):
+            st.caption("Default cluster = underlying ticker. Override to group related names.")
+            tag_underlying = st.text_input("Underlying", key="tag_underlying").upper().strip()
+            existing_tag = repo.get_underlying_tag(tag_underlying) if tag_underlying else None
+            tag_value = st.text_input(
+                "Sector / cluster tag",
+                value=existing_tag.sector_tag if existing_tag else "",
+                key="tag_value",
+            )
+            if st.button("Save sector tag", key="save_sector_tag") and tag_underlying:
+                repo.upsert_underlying_tag(tag_underlying, tag_value or tag_underlying)
+                st.success(f"Tagged {tag_underlying} → {tag_value or tag_underlying}")
+
+        with st.expander("Earnings dates (manual fallback)"):
+            st.caption("Used when Schwab fundamentals are unavailable.")
+            earn_underlying = st.text_input("Underlying", key="earn_underlying").upper().strip()
+            existing_earn = repo.get_earnings_date(earn_underlying) if earn_underlying else None
+            earn_date = st.date_input(
+                "Next earnings date",
+                value=existing_earn.earnings_date if existing_earn and existing_earn.earnings_date else date.today(),
+                key="earn_date",
+            )
+            if st.button("Save earnings date", key="save_earnings") and earn_underlying:
+                repo.upsert_earnings_date(earn_underlying, earn_date, source="manual")
+                st.success(f"Saved earnings date for {earn_underlying}")
 
     with tab_epochs:
         epochs = repo.list_epochs()

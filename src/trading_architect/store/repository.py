@@ -128,6 +128,39 @@ class CashEventRecord:
     id: int | None = None
 
 
+@dataclass(frozen=True)
+class BenchmarkPriceRecord:
+    symbol: str
+    price_date: date
+    close_price: float
+    source: str = "schwab"
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class UnderlyingTagRecord:
+    underlying: str
+    sector_tag: str
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class EarningsDateRecord:
+    underlying: str
+    earnings_date: date | None
+    source: str = "manual"
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class PositionStopHistoryRecord:
+    symbol: str
+    silo: Silo
+    current_stop: float | None
+    recorded_at: datetime
+    id: int | None = None
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -836,6 +869,13 @@ class Repository:
                 """,
                 (symbol, silo.value),
             ).fetchone()
+        if current_stop is not None:
+            self.record_position_stop_history(
+                symbol=symbol,
+                silo=silo,
+                current_stop=current_stop,
+                recorded_at=datetime.now(timezone.utc),
+            )
         return PositionOverrideRecord(
             id=row["id"],
             symbol=row["symbol"],
@@ -1172,3 +1212,294 @@ class Repository:
         with self.db.connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [row_to_event(r) for r in rows]
+
+    def record_benchmark_price(self, record: BenchmarkPriceRecord) -> BenchmarkPriceRecord:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO benchmark_prices (symbol, price_date, close_price, source)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(symbol, price_date) DO UPDATE SET
+                    close_price = excluded.close_price,
+                    source = excluded.source
+                """,
+                (
+                    record.symbol.upper(),
+                    record.price_date.isoformat(),
+                    record.close_price,
+                    record.source,
+                ),
+            )
+        return record
+
+    def get_benchmark_price(self, symbol: str, price_date: date) -> BenchmarkPriceRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM benchmark_prices
+                WHERE symbol = ? AND price_date = ?
+                """,
+                (symbol.upper(), price_date.isoformat()),
+            ).fetchone()
+        if not row:
+            return None
+        return BenchmarkPriceRecord(
+            id=row["id"],
+            symbol=row["symbol"],
+            price_date=date.fromisoformat(row["price_date"]),
+            close_price=row["close_price"],
+            source=row["source"],
+        )
+
+    def list_benchmark_prices(
+        self,
+        symbol: str,
+        *,
+        since: date | None = None,
+        until: date | None = None,
+    ) -> list[BenchmarkPriceRecord]:
+        query = "SELECT * FROM benchmark_prices WHERE symbol = ?"
+        params: list = [symbol.upper()]
+        if since:
+            query += " AND price_date >= ?"
+            params.append(since.isoformat())
+        if until:
+            query += " AND price_date <= ?"
+            params.append(until.isoformat())
+        query += " ORDER BY price_date ASC"
+        with self.db.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            BenchmarkPriceRecord(
+                id=row["id"],
+                symbol=row["symbol"],
+                price_date=date.fromisoformat(row["price_date"]),
+                close_price=row["close_price"],
+                source=row["source"],
+            )
+            for row in rows
+        ]
+
+    def has_benchmark_price_for_date(self, symbol: str, price_date: date) -> bool:
+        return self.get_benchmark_price(symbol, price_date) is not None
+
+    def daily_equity_series(
+        self,
+        *,
+        silo: Silo | None = None,
+    ) -> list[tuple[date, float]]:
+        """End-of-day equity totals from balance snapshots (latest per account per day)."""
+        accounts = self.list_accounts(silo=silo)
+        if not accounts:
+            return []
+        account_ids = {a.id for a in accounts}
+        placeholders = ",".join("?" * len(account_ids))
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT account_id, date(as_of) AS d, equity_value, as_of, id
+                FROM balance_snapshots
+                WHERE account_id IN ({placeholders})
+                ORDER BY d ASC, as_of ASC, id ASC
+                """,
+                list(account_ids),
+            ).fetchall()
+        by_day_account: dict[date, dict[int, float]] = {}
+        for row in rows:
+            d = date.fromisoformat(row["d"])
+            by_day_account.setdefault(d, {})[row["account_id"]] = row["equity_value"]
+        return [(d, sum(acct_vals.values())) for d, acct_vals in sorted(by_day_account.items())]
+
+    def daily_cash_flows(self, *, silo: Silo | None = None) -> dict[date, float]:
+        """Net external cash flow by date (deposits positive, withdrawals negative)."""
+        accounts = self.list_accounts(silo=silo)
+        account_ids = {a.id for a in accounts}
+        flows: dict[date, float] = {}
+        for event in self.list_cash_events():
+            if event.account_id not in account_ids:
+                continue
+            if event.classification == "deposit":
+                d = event.detected_at.date()
+                flows[d] = flows.get(d, 0.0) + event.delta
+            elif event.classification == "withdrawal":
+                d = event.detected_at.date()
+                flows[d] = flows.get(d, 0.0) - abs(event.delta)
+        return flows
+
+    def upsert_underlying_tag(self, underlying: str, sector_tag: str) -> UnderlyingTagRecord:
+        now = datetime.now(timezone.utc).isoformat()
+        tag = sector_tag.strip() or underlying.upper()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO underlying_tags (underlying, sector_tag, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(underlying) DO UPDATE SET
+                    sector_tag = excluded.sector_tag,
+                    updated_at = excluded.updated_at
+                """,
+                (underlying.upper(), tag, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM underlying_tags WHERE underlying = ?",
+                (underlying.upper(),),
+            ).fetchone()
+        return UnderlyingTagRecord(
+            underlying=row["underlying"],
+            sector_tag=row["sector_tag"],
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def get_underlying_tag(self, underlying: str) -> UnderlyingTagRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM underlying_tags WHERE underlying = ?",
+                (underlying.upper(),),
+            ).fetchone()
+        if not row:
+            return None
+        return UnderlyingTagRecord(
+            underlying=row["underlying"],
+            sector_tag=row["sector_tag"],
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def list_underlying_tags(self) -> list[UnderlyingTagRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute("SELECT * FROM underlying_tags ORDER BY underlying").fetchall()
+        return [
+            UnderlyingTagRecord(
+                underlying=row["underlying"],
+                sector_tag=row["sector_tag"],
+                updated_at=_parse_dt(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def upsert_earnings_date(
+        self,
+        underlying: str,
+        earnings_date: date | None,
+        *,
+        source: str = "manual",
+    ) -> EarningsDateRecord:
+        now = datetime.now(timezone.utc).isoformat()
+        ed = earnings_date.isoformat() if earnings_date else None
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO earnings_dates (underlying, earnings_date, source, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(underlying) DO UPDATE SET
+                    earnings_date = excluded.earnings_date,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at
+                """,
+                (underlying.upper(), ed, source, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM earnings_dates WHERE underlying = ?",
+                (underlying.upper(),),
+            ).fetchone()
+        return EarningsDateRecord(
+            underlying=row["underlying"],
+            earnings_date=date.fromisoformat(row["earnings_date"]) if row["earnings_date"] else None,
+            source=row["source"],
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def get_earnings_date(self, underlying: str) -> EarningsDateRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM earnings_dates WHERE underlying = ?",
+                (underlying.upper(),),
+            ).fetchone()
+        if not row:
+            return None
+        return EarningsDateRecord(
+            underlying=row["underlying"],
+            earnings_date=date.fromisoformat(row["earnings_date"]) if row["earnings_date"] else None,
+            source=row["source"],
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def record_position_stop_history(
+        self,
+        *,
+        symbol: str,
+        silo: Silo,
+        current_stop: float | None,
+        recorded_at: datetime,
+    ) -> PositionStopHistoryRecord:
+        ts = recorded_at.astimezone(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO position_stop_history (symbol, silo, current_stop, recorded_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (symbol.upper(), silo.value, current_stop, ts),
+            )
+            row_id = cursor.lastrowid
+        return PositionStopHistoryRecord(
+            id=row_id,
+            symbol=symbol.upper(),
+            silo=silo,
+            current_stop=current_stop,
+            recorded_at=recorded_at,
+        )
+
+    def stop_at_time(
+        self,
+        symbol: str,
+        silo: Silo,
+        as_of: datetime,
+    ) -> float | None:
+        """Most recent recorded current_stop at or before as_of."""
+        ts = as_of.astimezone(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT current_stop FROM position_stop_history
+                WHERE symbol = ? AND silo = ? AND recorded_at <= ?
+                ORDER BY recorded_at DESC
+                LIMIT 1
+                """,
+                (symbol.upper(), silo.value, ts),
+            ).fetchone()
+        if row:
+            return row["current_stop"]
+        override = self.get_position_override(symbol, silo)
+        if override and override.current_stop is not None:
+            if override.updated_at is None or override.updated_at <= as_of:
+                return override.current_stop
+        return None
+
+    def holdings_mark_history(
+        self,
+        symbol: str,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> list[tuple[datetime, float]]:
+        """Mark history for a symbol from holdings snapshots while held."""
+        since_iso = since.astimezone(timezone.utc).isoformat()
+        until_iso = until.astimezone(timezone.utc).isoformat()
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT as_of, mark, mtm_value, qty FROM holdings_snapshots
+                WHERE symbol = ? AND as_of >= ? AND as_of <= ?
+                AND qty != 0
+                ORDER BY as_of ASC
+                """,
+                (symbol.upper(), since_iso, until_iso),
+            ).fetchall()
+        out: list[tuple[datetime, float]] = []
+        for row in rows:
+            mark = row["mark"]
+            if mark is None and row["qty"]:
+                mark = row["mtm_value"] / row["qty"] if row["qty"] else None
+            if mark is not None:
+                out.append((_parse_dt(row["as_of"]), float(mark)))
+        return out

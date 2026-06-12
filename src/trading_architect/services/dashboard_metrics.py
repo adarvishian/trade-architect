@@ -177,3 +177,60 @@ def standard_dollar_risk(equity: float, base_f: float, kelly_fraction: float) ->
     if equity <= 0:
         return 0.0
     return equity * base_f * kelly_fraction
+
+
+@dataclass(frozen=True)
+class ClusterStress:
+    cluster_label: str
+    cluster_notional: float
+    cluster_pct: float
+    stress_gap_dollars: float
+    stress_gap_equity_pct: float
+
+
+def _cluster_label(underlying: str, repo) -> str:
+    tag = repo.get_underlying_tag(underlying)
+    if tag:
+        return tag.sector_tag
+    return underlying
+
+
+def concentration_clusters(
+    positions: list[Position],
+    repo,
+) -> list[tuple[str, float]]:
+    """Group open positions by sector tag; return (cluster, delta notional) sorted desc."""
+    by_cluster: dict[str, float] = {}
+    for pos in positions:
+        if pos.status != PositionStatus.OPEN:
+            continue
+        label = _cluster_label(pos.underlying, repo)
+        by_cluster[label] = by_cluster.get(label, 0.0) + pos.current_delta_notional
+    return sorted(by_cluster.items(), key=lambda x: x[1], reverse=True)
+
+
+def top_cluster_stress(
+    positions: list[Position],
+    repo,
+    *,
+    equity: float,
+    stress_pct: float = -0.15,
+) -> ClusterStress | None:
+    """Top cluster share and arithmetic stress line from delta notional."""
+    clusters = concentration_clusters(positions, repo)
+    if not clusters:
+        return None
+    total_notional = sum(n for _, n in clusters)
+    if total_notional <= 0:
+        return None
+    label, notional = clusters[0]
+    cluster_pct = notional / total_notional
+    gap_dollars = notional * stress_pct
+    equity_pct = gap_dollars / equity if equity > 0 else 0.0
+    return ClusterStress(
+        cluster_label=label,
+        cluster_notional=notional,
+        cluster_pct=cluster_pct,
+        stress_gap_dollars=gap_dollars,
+        stress_gap_equity_pct=equity_pct,
+    )

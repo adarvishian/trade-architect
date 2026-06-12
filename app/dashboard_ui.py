@@ -27,9 +27,17 @@ from trading_architect.services.dashboard_metrics import (
     options_theta_day,
     position_risk_rows,
     standard_dollar_risk,
+    top_cluster_stress,
     top_concentrations,
 )
+from trading_architect.services.earnings import earnings_flags_for_positions
+from trading_architect.services.exit_efficiency import exit_efficiency_report
 from trading_architect.services.position_stops import has_stop
+from trading_architect.services.stop_slippage import (
+    portfolio_slippage_adjusted_heat,
+    slippage_calibration,
+)
+from trading_architect.services.twr import format_twr_pct, twr_report
 from trading_architect.store.repository import Repository
 
 
@@ -79,6 +87,8 @@ def render_dashboard(
 
     render_deposit_prompts(repo)
 
+    _render_twr_card(repo)
+
     # Block 1 — Where am I
     st.subheader("Where am I")
     w1, w2, w3 = st.columns(3)
@@ -112,6 +122,16 @@ def render_dashboard(
     r1, r2, r3, r4 = st.columns(4)
     so = book.stock_options
     r1.metric("Open heat", f"${so.open_dollar_risk:,.0f}", f"{so.heat:.0%} of cap")
+    cal = slippage_calibration(repo)
+    if holdings:
+        raw_stop, adj_stop = portfolio_slippage_adjusted_heat(holdings, repo, cal)
+        if cal.status == "calibrated" and adj_stop > raw_stop:
+            adj_heat = adj_stop / so.equity if so.equity > 0 else 0.0
+            r1.caption(
+                f"Heat (slippage-adj): ${adj_stop:,.0f} ({adj_heat:.0%} of cap)"
+            )
+        elif cal.status == "calibrating":
+            r1.caption("Slippage pad: calibrating (<10 exit observations)")
     r2.metric("Heat cap", f"{cfg.heat_cap:.0%}", cap_status_pct(so.heat, cfg.heat_cap))
     r3.metric("Drawdown", f"{book.effective_drawdown_pct:.1%}", book.effective_governor.state.value)
     r4.metric("Governor", book.effective_governor.state.value.replace("_", " "))
@@ -133,6 +153,33 @@ def render_dashboard(
             "Top concentrations: "
             + " · ".join(f"{u} ${n:,.0f}" for u, n in concentrations)
         )
+
+    stress = top_cluster_stress(
+        holdings,
+        repo,
+        equity=book.stock_options.equity,
+        stress_pct=settings.cluster_stress_pct,
+    ) if holdings else None
+    if stress:
+        gap_pct_label = abs(settings.cluster_stress_pct) * 100
+        st.caption(
+            f"Top cluster **{stress.cluster_label}** = {stress.cluster_pct:.0%} of book · "
+            f"{gap_pct_label:.0f}% gap ≈ ${stress.stress_gap_dollars:,.0f} "
+            f"({stress.stress_gap_equity_pct:.1%} of equity)"
+        )
+
+    if holdings:
+        flags = earnings_flags_for_positions(repo, holdings)
+        upcoming = [f for f in flags if f.earnings_date and f.days_until is not None and f.days_until <= 14]
+        if upcoming:
+            for flag in upcoming:
+                legs = f", {flag.option_legs_held} calls/puts held" if flag.option_legs_held else ""
+                src = " (manual)" if flag.degraded else ""
+                st.caption(
+                    f"📅 **{flag.underlying}** earnings in {flag.days_until}d{legs}{src}"
+                )
+        elif any(f.degraded for f in flags):
+            st.caption("Earnings dates: degraded — set manual dates in Settings.")
 
     if holdings:
         risk_rows = position_risk_rows(holdings, repo)
@@ -230,6 +277,56 @@ def render_dashboard(
     _render_edge_card(events, settings, book)
     _render_sizing_efficiency_card(events, settings)
     _render_adherence_card(repo)
+    _render_exit_efficiency_card(repo)
+
+
+def _render_twr_card(repo: Repository) -> None:
+    report = twr_report(repo)
+    st.markdown("**Performance vs SPY (TWR, net of deposits/withdrawals)**")
+
+    def _row(period) -> None:
+        if not period.sufficient_history:
+            st.caption(f"{period.label}: insufficient history (<3 months of snapshots)")
+            return
+        c1, c2, c3 = st.columns(3)
+        c1.metric(period.label, format_twr_pct(period.portfolio_twr))
+        c2.metric("SPY", format_twr_pct(period.benchmark_twr))
+        if period.portfolio_twr is not None and period.benchmark_twr is not None:
+            alpha = period.portfolio_twr - period.benchmark_twr
+            c3.metric("vs SPY", format_twr_pct(alpha))
+        else:
+            c3.metric("vs SPY", "—")
+
+    _row(report.combined_ytd)
+    _row(report.combined_t12)
+
+
+def _render_exit_efficiency_card(repo: Repository) -> None:
+    report = exit_efficiency_report(repo, limit=20)
+    st.markdown("**Exit efficiency (MFE capture, evaluation only)**")
+    if report.trade_count == 0:
+        st.caption("No closed stock/futures round-trips with mark history yet.")
+        return
+    if report.median_mfe_capture_pct is not None:
+        st.metric(
+            f"Median MFE captured (last {report.trade_count} closed)",
+            f"{report.median_mfe_capture_pct:.0%}",
+        )
+    with st.expander("Exit efficiency drill-down"):
+        rows = []
+        for row in report.rows:
+            rows.append(
+                {
+                    "underlying": row.underlying,
+                    "closed": row.closed_at.strftime("%Y-%m-%d"),
+                    "exit_r": row.exit_r,
+                    "max_r": row.max_r_reached,
+                    "mfe_capture": (
+                        f"{row.mfe_capture_pct:.0%}" if row.mfe_capture_pct is not None else "—"
+                    ),
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _render_positions_table(

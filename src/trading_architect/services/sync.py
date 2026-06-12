@@ -110,6 +110,12 @@ def _sync_schwab_accounts(
             accounts=snapshot.accounts,
             legs=legs,
         )
+        try:
+            from trading_architect.services.benchmark import record_daily_benchmark
+
+            record_daily_benchmark(repo)
+        except Exception:
+            pass
         for balance in snapshot.accounts:
             results.append(
                 SyncResult(

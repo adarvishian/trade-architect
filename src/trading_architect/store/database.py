@@ -216,6 +216,43 @@ CREATE TABLE IF NOT EXISTS cash_events (
 CREATE INDEX IF NOT EXISTS idx_cash_events_account ON cash_events(account_id);
 CREATE INDEX IF NOT EXISTS idx_cash_events_classification ON cash_events(classification);
 CREATE INDEX IF NOT EXISTS idx_book_metrics_daily_date ON book_metrics_daily(metric_date);
+
+CREATE TABLE IF NOT EXISTS benchmark_prices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    price_date TEXT NOT NULL,
+    close_price REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'schwab',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(symbol, price_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_benchmark_prices_symbol_date
+    ON benchmark_prices(symbol, price_date);
+
+CREATE TABLE IF NOT EXISTS underlying_tags (
+    underlying TEXT PRIMARY KEY,
+    sector_tag TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS earnings_dates (
+    underlying TEXT PRIMARY KEY,
+    earnings_date TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS position_stop_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    silo TEXT NOT NULL,
+    current_stop REAL,
+    recorded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_stop_history_symbol
+    ON position_stop_history(symbol, silo, recorded_at);
 """
 
 
@@ -247,6 +284,7 @@ class Database:
             self._migrate_accounts(conn)
             self._migrate_phase2(conn)
             self._migrate_phase3(conn)
+            self._migrate_phase4(conn)
             for epoch in DEFAULT_EPOCHS:
                 conn.execute(
                     """
@@ -406,6 +444,51 @@ class Database:
                     ON cash_events(account_id);
                 CREATE INDEX IF NOT EXISTS idx_cash_events_classification
                     ON cash_events(classification);
+                """
+            )
+
+    def _migrate_phase4(self, conn: sqlite3.Connection) -> None:
+        """Additive migrations for Phase 4 — edge & awareness."""
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "benchmark_prices" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS benchmark_prices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    price_date TEXT NOT NULL,
+                    close_price REAL NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'schwab',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(symbol, price_date)
+                );
+                CREATE INDEX IF NOT EXISTS idx_benchmark_prices_symbol_date
+                    ON benchmark_prices(symbol, price_date);
+                CREATE TABLE IF NOT EXISTS underlying_tags (
+                    underlying TEXT PRIMARY KEY,
+                    sector_tag TEXT NOT NULL,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS earnings_dates (
+                    underlying TEXT PRIMARY KEY,
+                    earnings_date TEXT,
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS position_stop_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    silo TEXT NOT NULL,
+                    current_stop REAL,
+                    recorded_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_position_stop_history_symbol
+                    ON position_stop_history(symbol, silo, recorded_at);
                 """
             )
 
