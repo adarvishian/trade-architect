@@ -369,19 +369,19 @@ def _apply_cash_cap(
             detail = f"Cash ${cash:,.0f} / ${cost_per_unit:,.0f} per contract → max {max_qty_cash:.1f}"
     elif candidate.asset_type == AssetType.STOCK:
         spot = candidate.spot_price or candidate.entry_price
-        liquidity = cash + buying_power
+        liquidity = max(cash, buying_power)
         if spot > 0:
             max_qty_cash = liquidity / spot
             detail = (
-                f"Cash ${cash:,.0f} + buying power ${buying_power:,.0f} / "
+                f"Cash ${cash:,.0f} / buying power ${buying_power:,.0f} (max ${liquidity:,.0f}) / "
                 f"${spot:,.2f} spot → max {max_qty_cash:.1f} shares"
             )
     else:
         notional_per = _notional_per_unit(candidate)
-        liquidity = cash + buying_power
+        liquidity = max(cash, buying_power)
         if notional_per > 0:
             max_qty_cash = liquidity / notional_per
-            detail = f"Cash + buying power ${liquidity:,.0f} / ${notional_per:,.0f} notional"
+            detail = f"Max(cash, BP) ${liquidity:,.0f} / ${notional_per:,.0f} notional"
 
     qty_final = max(min(qty_pre_cap, max_qty_cash), 0.0)
     layers.append(

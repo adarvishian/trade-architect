@@ -20,6 +20,7 @@ from trading_architect.engines.equity import (
 from trading_architect.engines.formulas import leverage_ratio, portfolio_heat
 from trading_architect.engines.marks import MarksProvider, default_marks_provider
 from trading_architect.models.entities import Position, Silo, TradeEvent
+from trading_architect.store.repository import Repository
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ def _silo_state(
     *,
     live_equity: float | None = None,
     live_peak_equity: float | None = None,
+    repo: Repository | None = None,
 ) -> SiloBookState:
     starting = settings.starting_equity()[silo]
     equity, peak = equity_metrics_for_silo(
@@ -100,12 +102,20 @@ def _silo_state(
         live_equity=live_equity,
     )
     if live_peak_equity is not None:
-        peak = max(peak, live_peak_equity)
+        peak = live_peak_equity
     if live_equity is not None:
         equity = live_equity
-        peak = max(peak, live_equity)
 
-    dd_pct = compute_drawdown_pct(equity, peak)
+    dd_equity = equity
+    dd_peak = peak
+    if live_equity is not None and repo is not None:
+        from trading_architect.services.cash_events import trading_equity_adjustment
+
+        dd_equity = trading_equity_adjustment(repo, silo, equity)
+        if live_peak_equity is not None:
+            dd_peak = live_peak_equity
+
+    dd_pct = compute_drawdown_pct(dd_equity, dd_peak)
     governor = assess_drawdown_state(dd_pct, settings.sizing)
     governor = DrawdownMetrics(
         current_equity=equity,
@@ -148,6 +158,7 @@ def build_book_context(
     live_futures_equity: float | None = None,
     live_stock_options_peak: float | None = None,
     live_futures_peak: float | None = None,
+    repo: Repository | None = None,
 ) -> BookContext:
     """Aggregate per-silo and account-level book state for dashboards and sizing."""
     marks_provider = marks_provider if marks_provider is not None else default_marks_provider()
@@ -159,6 +170,7 @@ def build_book_context(
         marks_provider,
         live_equity=live_stock_options_equity,
         live_peak_equity=live_stock_options_peak,
+        repo=repo,
     )
     fut = _silo_state(
         Silo.FUTURES,
@@ -168,6 +180,7 @@ def build_book_context(
         marks_provider,
         live_equity=live_futures_equity,
         live_peak_equity=live_futures_peak,
+        repo=repo,
     )
 
     account_equity = stock.equity + fut.equity

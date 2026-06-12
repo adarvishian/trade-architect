@@ -33,24 +33,33 @@ class DeployableBreakdown:
     as_of: datetime | None = None
 
 
-def _is_brokerage(acct: AccountRecord) -> bool:
-    return acct.kind in BROKERAGE_KINDS
+def _counts_as_brokerage_liquidity(acct: AccountRecord, silo: Silo) -> bool:
+    if acct.silo != silo:
+        return False
+    if acct.kind in BROKERAGE_KINDS:
+        return True
+    return acct.kind == "manual" and silo == Silo.FUTURES
 
 
-def silo_brokerage_liquidity(repo: Repository, silo: Silo) -> tuple[float, float]:
-    """Sum cash and buying power from latest snapshots for brokerage accounts in silo."""
+def silo_brokerage_liquidity(repo: Repository, silo: Silo) -> tuple[float | None, float | None]:
+    """Sum brokerage liquidity; None when no snapshots exist (missing data ≠ $0)."""
     latest = repo.latest_balances()
     cash = 0.0
     buying_power = 0.0
+    has_data = False
     for acct in repo.list_accounts(silo=silo):
-        if not _is_brokerage(acct):
+        if not _counts_as_brokerage_liquidity(acct, silo):
             continue
         snap = latest.get(acct.id)
         if snap is None:
             continue
+        has_data = True
         cash += snap.cash
         buying_power += snap.buying_power
-    return cash, buying_power
+    if not has_data:
+        return None, None
+    liquidity = max(cash, buying_power)
+    return liquidity, buying_power
 
 
 def deployable_capital(repo: Repository, settings: AppSettings) -> DeployableBreakdown:
@@ -67,14 +76,15 @@ def deployable_capital(repo: Repository, settings: AppSettings) -> DeployableBre
         snap = latest.get(acct.id)
         if snap is None:
             continue
-        total_capital += snap.equity_value
+        if acct.kind != "cash_only":
+            total_capital += snap.equity_value
         if newest is None or snap.as_of > newest:
             newest = snap.as_of
         if not acct.include_in_deployable:
             continue
-        if _is_brokerage(acct):
+        if acct.kind in BROKERAGE_KINDS:
             brokerage_cash += snap.cash
-        elif acct.kind == "manual":
+        elif acct.kind in {"manual", "cash_only"}:
             non_brokerage_cash += snap.cash
 
     reserve_held = reserve(settings)

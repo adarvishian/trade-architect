@@ -33,18 +33,26 @@ def _snapshot_live_equity(
     settings: AppSettings,
     silo: Silo,
 ) -> tuple[float | None, float | None]:
-    """Return (deposit-adjusted live equity, adjusted peak) when snapshots exist."""
-    from trading_architect.services.cash_events import trading_equity_adjustment
-
-    accounts = repo.list_accounts(silo=silo)
-    if not accounts:
+    """Return (raw live equity, deposit-adjusted peak) when snapshots exist."""
+    if not repo.list_accounts(silo=silo):
         return None, None
     equity, as_of = silo_equity_from_snapshots(repo, silo, settings)
     if as_of is None:
         return None, None
-    adjusted = trading_equity_adjustment(repo, silo, equity)
     peak = silo_peak_equity_from_snapshots(repo, silo, settings)
-    return adjusted, peak
+    return equity, peak
+
+
+def _merge_book_positions(holdings_positions: list, ledger_positions: list) -> list:
+    """Holdings drive stock/options; ledger retains futures when holdings lack them."""
+    from trading_architect.models.entities import PositionStatus, Silo
+
+    open_ledger = [p for p in ledger_positions if p.status == PositionStatus.OPEN]
+    so_holdings = [p for p in holdings_positions if p.silo == Silo.STOCK_OPTIONS]
+    fut_holdings = [p for p in holdings_positions if p.silo == Silo.FUTURES]
+    so_ledger = [p for p in open_ledger if p.silo == Silo.STOCK_OPTIONS]
+    fut_ledger = [p for p in open_ledger if p.silo == Silo.FUTURES]
+    return (so_holdings or so_ledger) + (fut_holdings or fut_ledger)
 
 
 def build_app_book_context(
@@ -60,7 +68,11 @@ def build_app_book_context(
     repo = repo or create_repository()
 
     holdings_positions = current_positions(repo, marks_provider)
-    book_positions = holdings_positions if holdings_positions else positions
+    book_positions = (
+        _merge_book_positions(holdings_positions, positions)
+        if holdings_positions
+        else positions
+    )
 
     so_equity, so_peak = _snapshot_live_equity(repo, settings, Silo.STOCK_OPTIONS)
     fut_equity, fut_peak = _snapshot_live_equity(repo, settings, Silo.FUTURES)
@@ -74,6 +86,7 @@ def build_app_book_context(
         live_futures_equity=fut_equity,
         live_stock_options_peak=so_peak,
         live_futures_peak=fut_peak,
+        repo=repo,
     )
 
 
