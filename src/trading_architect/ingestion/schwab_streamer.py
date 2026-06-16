@@ -29,6 +29,16 @@ _HEARTBEAT_STALE_SECONDS = 45.0
 _BACKOFF_INITIAL = 1.0
 _BACKOFF_MAX = 30.0
 
+
+def _is_benign_streamer_disconnect(exc: BaseException) -> bool:
+    """Normal WebSocket close — reconnect without error-level logging."""
+    try:
+        from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
+    except ImportError:
+        return False
+    return isinstance(exc, (ConnectionClosedOK, ConnectionClosed))
+
+
 _client_lock = threading.Lock()
 _shared_client: StreamerClient | None = None
 
@@ -315,11 +325,18 @@ class StreamerClient:
                     if _shared_client is self:
                         _shared_client = None
                 break
-            except Exception:
-                logger.exception("Schwab Streamer session ended")
+            except Exception as exc:
                 self._connected.clear()
                 if self._stop.is_set():
                     break
+                if _is_benign_streamer_disconnect(exc):
+                    logger.info(
+                        "Schwab Streamer disconnected (%s); reconnecting in %.0fs",
+                        exc,
+                        backoff,
+                    )
+                else:
+                    logger.exception("Schwab Streamer session ended")
                 time.sleep(backoff)
                 backoff = min(backoff * 2, _BACKOFF_MAX)
 

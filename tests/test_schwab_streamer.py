@@ -12,6 +12,7 @@ import pytest
 from trading_architect.ingestion.schwab_auth import StreamerInfo
 from trading_architect.ingestion.schwab_streamer import (
     StreamerClient,
+    _is_benign_streamer_disconnect,
     decode_equity_row,
     decode_option_row,
     merge_quote_update,
@@ -102,6 +103,16 @@ def test_reconnect_triggered_on_login_denied():
         on_reconnect=lambda: triggered.append(True),
     )
     assert triggered == [True]
+
+
+def test_benign_streamer_disconnect_includes_normal_close():
+    try:
+        from websockets.exceptions import ConnectionClosedOK
+    except ImportError:
+        pytest.skip("websockets not installed")
+
+    assert _is_benign_streamer_disconnect(ConnectionClosedOK(None, None))
+    assert not _is_benign_streamer_disconnect(ConnectionError("heartbeat stale"))
 
 
 class _FakeWebSocket:
