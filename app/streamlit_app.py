@@ -71,6 +71,8 @@ def get_repository():
 
 def maybe_run_sync(repo) -> None:
     """Auto-sync broker snapshots on open and when TTL expires."""
+    from trading_architect.ingestion.schwab_auth import default_token_path, token_file_present
+
     if "app_settings" not in st.session_state:
         st.session_state.app_settings = repo.load_app_settings()
     settings: AppSettings = st.session_state.app_settings
@@ -78,6 +80,11 @@ def maybe_run_sync(repo) -> None:
     now = datetime.now(timezone.utc)
     last = st.session_state.get("last_sync_at")
     force = st.session_state.pop("force_sync", False)
+    if token_file_present():
+        token_mtime = default_token_path().stat().st_mtime
+        if st.session_state.get("schwab_token_mtime") != token_mtime:
+            st.session_state.schwab_token_mtime = token_mtime
+            force = True
     if force or last is None or (now - last) > ttl:
         results = sync_all(
             repo,

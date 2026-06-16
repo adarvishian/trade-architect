@@ -221,6 +221,18 @@ class SchwabSession:
         return wrapped
 
 
+def reset_schwab_session_cache() -> None:
+    """Drop cached Streamer metadata and the process-wide streamer after re-auth."""
+    global _user_preference_cache
+    _user_preference_cache = None
+    try:
+        from trading_architect.ingestion.schwab_streamer import reset_streamer_client
+
+        reset_streamer_client()
+    except ImportError:
+        pass
+
+
 def _build_client(*, interactive: bool) -> Any:
     from schwab.auth import (
         client_from_access_functions,
@@ -231,6 +243,20 @@ def _build_client(*, interactive: bool) -> Any:
     token_path = default_token_path()
     token_read = _token_loader(token_path)
     token_write = _secure_token_write(token_path)
+
+    if interactive:
+        try:
+            return client_from_login_flow(
+                api_key,
+                app_secret,
+                callback_url,
+                token_path,
+                token_write_func=token_write,
+            )
+        except Exception as exc:
+            if _is_auth_failure(exc):
+                raise SchwabAuthExpired() from exc
+            raise
 
     if token_path.is_file():
         try:
@@ -245,25 +271,11 @@ def _build_client(*, interactive: bool) -> Any:
                 raise SchwabAuthExpired() from exc
             raise
 
-    if not interactive:
-        raise FileNotFoundError(
-            f"No Schwab token at {token_path}. "
-            "Run `ta fetch-schwab --login` once to authenticate, "
-            "or set SCHWAB_TOKEN_PATH to an existing token file."
-        )
-
-    try:
-        return client_from_login_flow(
-            api_key,
-            app_secret,
-            callback_url,
-            token_path,
-            token_write_func=token_write,
-        )
-    except Exception as exc:
-        if _is_auth_failure(exc):
-            raise SchwabAuthExpired() from exc
-        raise
+    raise FileNotFoundError(
+        f"No Schwab token at {token_path}. "
+        "Run `ta fetch-schwab --login` once to authenticate, "
+        "or set SCHWAB_TOKEN_PATH to an existing token file."
+    )
 
 
 def _token_loader(path: Path):
@@ -307,8 +319,7 @@ def reauthenticate() -> SchwabSession:
             raise SchwabAuthExpired() from exc
         raise
 
-    global _user_preference_cache
-    _user_preference_cache = None
+    reset_schwab_session_cache()
     _chmod_token_file(token_path)
     return SchwabSession(raw)
 
@@ -379,11 +390,16 @@ def schwab_connection_status() -> dict[str, str | bool | int | None]:
             **status,
         }
 
-    days_left = status.get("days_left")
-    if days_left is not None:
-        message = f"Connected — refresh token expires in {days_left} day(s)"
+    refresh_expires_at = status.get("refresh_expires_at")
+    now = datetime.now(timezone.utc)
+    if isinstance(refresh_expires_at, datetime) and refresh_expires_at <= now:
+        message = "Refresh token expired — run `ta fetch-schwab --login`"
     else:
-        message = f"Token file present ({default_token_path()})"
+        days_left = status.get("days_left")
+        if days_left is not None:
+            message = f"Connected — refresh token expires in {days_left} day(s)"
+        else:
+            message = f"Token file present ({default_token_path()})"
 
     return {
         "installed": True,

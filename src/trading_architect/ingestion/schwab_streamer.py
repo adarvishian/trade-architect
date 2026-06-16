@@ -296,6 +296,7 @@ class StreamerClient:
         return str(self._request_id)
 
     def _run_loop(self) -> None:
+        global _shared_client
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         backoff = _BACKOFF_INITIAL
@@ -309,6 +310,10 @@ class StreamerClient:
                     "Reconnect with `ta fetch-schwab --login` or reauthenticate in Settings."
                 )
                 self._connected.clear()
+                self._session = None
+                with _client_lock:
+                    if _shared_client is self:
+                        _shared_client = None
                 break
             except Exception:
                 logger.exception("Schwab Streamer session ended")
@@ -447,6 +452,15 @@ class StreamerClient:
         self._resubscribe.set()
         if self._loop and self._loop.is_running() and self._ws:
             asyncio.run_coroutine_threadsafe(self._ws.close(), self._loop)
+
+
+def reset_streamer_client() -> None:
+    """Close and discard the process-wide streamer singleton."""
+    global _shared_client
+    with _client_lock:
+        if _shared_client is not None:
+            _shared_client.close()
+            _shared_client = None
 
 
 def get_streamer_client(**kwargs: Any) -> StreamerClient:

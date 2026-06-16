@@ -281,11 +281,18 @@ def main() -> None:
             if not schwab_py_available():
                 print('Install schwab-py first: pip install -e ".[schwab]"')
                 return
+            from trading_architect.ingestion.schwab_auth import reset_schwab_session_cache
+
             try:
-                get_client(interactive=True)
+                session = get_client(interactive=True)
+                resp = session.get_user_preferences()
+                if resp.status_code != 200:
+                    print(f"OAuth finished but userPreference returned {resp.status_code}.")
+                    return
             except SchwabAuthExpired as exc:
                 print(exc)
                 return
+            reset_schwab_session_cache()
             print("Schwab OAuth login complete. Token saved.")
             return
 

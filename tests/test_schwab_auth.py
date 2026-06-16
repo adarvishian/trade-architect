@@ -116,6 +116,61 @@ def test_schwab_auth_expired_message():
     assert "Reconnect" in str(exc) or "login" in str(exc).lower()
 
 
+def test_build_client_interactive_runs_login_flow(tmp_path, monkeypatch):
+    """--login must run OAuth even when an expired token file already exists."""
+    token_path = tmp_path / ".schwab_token.json"
+    token_path.write_text('{"creation_timestamp": 1, "token": {"access_token": "old"}}')
+    monkeypatch.setattr(schwab_auth, "default_token_path", lambda: token_path)
+    monkeypatch.setenv("SCHWAB_API_KEY", "key")
+    monkeypatch.setenv("SCHWAB_APP_SECRET", "secret")
+
+    login_client = MagicMock()
+    access_client = MagicMock()
+
+    def fake_login_flow(*args, **kwargs):
+        return login_client
+
+    def fake_access_functions(*args, **kwargs):
+        return access_client
+
+    monkeypatch.setattr(
+        "schwab.auth.client_from_login_flow",
+        fake_login_flow,
+    )
+    monkeypatch.setattr(
+        "schwab.auth.client_from_access_functions",
+        fake_access_functions,
+    )
+
+    client = schwab_auth._build_client(interactive=True)
+    assert client is login_client
+    access_client.assert_not_called()
+    login_client.assert_not_called()
+
+
+def test_schwab_connection_status_reports_expired_refresh(tmp_path, monkeypatch):
+    token_path = tmp_path / ".schwab_token.json"
+    expired = int(time.time()) - 86400
+    bundle = {
+        "creation_timestamp": expired - 7 * 86400,
+        "token": {
+            "access_token": "redacted",
+            "refresh_token": "redacted",
+            "expires_at": expired,
+        },
+    }
+    token_path.write_text(json.dumps(bundle), encoding="utf-8")
+    monkeypatch.setattr(schwab_auth, "default_token_path", lambda: token_path)
+    monkeypatch.setattr(schwab_auth, "schwab_py_available", lambda: True)
+    monkeypatch.setattr(
+        "trading_architect.config.env.schwab_credentials_configured",
+        lambda: True,
+    )
+
+    status = schwab_auth.schwab_connection_status()
+    assert "expired" in str(status["message"]).lower()
+
+
 def test_token_status_never_exposes_secrets(tmp_path, monkeypatch, caplog):
     token_path = tmp_path / ".schwab_token.json"
     secret = "super-secret-access-token-value"
