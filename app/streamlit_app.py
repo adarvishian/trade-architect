@@ -12,10 +12,12 @@ import streamlit as st
 from dashboard_ui import render_dashboard
 from option_selector_ui import render_option_selector_branch
 from ui_helpers import (
+    asset_choices,
     render_app_header,
     render_governor_sidebar,
     render_ops_banner,
     show_ui_error,
+    silo_choices,
 )
 
 import trading_architect  # noqa: F401 — loads .env on import
@@ -124,7 +126,7 @@ page_index = PAGES.index(default_page) if default_page in PAGES else 0
 page = st.sidebar.radio("Navigate", PAGES, index=page_index)
 _as_of = newest_equity_as_of(repo)
 _as_of_text = _as_of.strftime("%Y-%m-%d %H:%M UTC") if _as_of else None
-render_governor_sidebar(book, equity_as_of=_as_of_text)
+render_governor_sidebar(book, equity_as_of=_as_of_text, show_futures=settings.show_futures)
 
 render_app_header()
 render_ops_banner(st.session_state.get("sync_results"))
@@ -185,7 +187,7 @@ elif page == "Accounts":
     with st.form("manual_account_form"):
         m_label = st.text_input("Label", placeholder="bank-checking")
         m_institution = st.text_input("Institution", placeholder="Chase")
-        m_silo = st.selectbox("Silo", ["stock_options", "futures"])
+        m_silo = st.selectbox("Silo", silo_choices(settings))
         m_cash_only = st.checkbox(
             "Cash-only (excluded from trading equity)",
             value=False,
@@ -266,7 +268,7 @@ elif page == "Accounts":
                 )
                 st.metric("Positions assembled", repo.position_count())
 
-                if broker == "tradovate":
+                if broker == "tradovate" and settings.show_futures:
                     from trading_architect.engines.trade_stats import (
                         format_duration,
                         summarize_closed_positions,
@@ -604,10 +606,15 @@ elif page == "Size a Trade":
     from trading_architect.models.entities import AssetType, Direction
 
     col_silo, col_asset = st.columns(2)
+    silo_options = silo_choices(settings)
     with col_silo:
-        silo_val = st.selectbox("Silo", ["stock_options", "futures"], key="size_silo")
+        if len(silo_options) == 1:
+            silo_val = silo_options[0]
+            st.text_input("Silo", value=silo_val, disabled=True, key="size_silo_display")
+        else:
+            silo_val = st.selectbox("Silo", silo_options, key="size_silo")
     with col_asset:
-        asset_val = st.selectbox("Asset", ["stock", "option", "future"], key="size_asset")
+        asset_val = st.selectbox("Asset", asset_choices(settings), key="size_asset")
 
     silo = Silo(silo_val)
     silo_state = book.stock_options if silo == Silo.STOCK_OPTIONS else book.futures
@@ -749,18 +756,25 @@ elif page == "Settings":
     fut_fallback = " (fallback)" if has_fut_snapshots else ""
 
     with tab_equity:
+        draft.show_futures = st.checkbox(
+            "Show futures silo in UI",
+            value=bool(draft.show_futures),
+            help="Off by default for v1 — futures code and data remain intact when hidden.",
+            key="set_show_futures",
+        )
         draft.starting_equity_stock_options = st.number_input(
             f"Starting equity — stock/options{so_fallback}",
             value=float(draft.starting_equity_stock_options),
             step=10_000.0,
             key="set_eq_stock",
         )
-        draft.starting_equity_futures = st.number_input(
-            f"Starting equity — futures{fut_fallback}",
-            value=float(draft.starting_equity_futures),
-            step=10_000.0,
-            key="set_eq_fut",
-        )
+        if draft.show_futures:
+            draft.starting_equity_futures = st.number_input(
+                f"Starting equity — futures{fut_fallback}",
+                value=float(draft.starting_equity_futures),
+                step=10_000.0,
+                key="set_eq_fut",
+            )
         draft.refresh_interval_min = int(
             st.number_input(
                 "Auto-sync interval (minutes)",

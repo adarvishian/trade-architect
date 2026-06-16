@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
-from ui_helpers import cap_status_pct, silo_book_row
+from ui_helpers import cap_status_pct, silo_exposure_rows
 
 from trading_architect.config.user_settings import AppSettings
 from trading_architect.engines.adaptive_risk import RiskAction, build_risk_review
@@ -81,9 +81,7 @@ def render_dashboard(
 
     as_of_times = [c["as_of"] for c in cards if c.get("as_of")]
     book_as_of = max(as_of_times) if as_of_times else None
-    as_of_text = (
-        book_as_of.strftime("%Y-%m-%d %H:%M UTC") if book_as_of else "—"
-    )
+    as_of_text = book_as_of.strftime("%Y-%m-%d %H:%M UTC") if book_as_of else "—"
 
     render_deposit_prompts(repo)
 
@@ -91,10 +89,15 @@ def render_dashboard(
 
     # Block 1 — Where am I
     st.subheader("Where am I")
-    w1, w2, w3 = st.columns(3)
-    w1.metric("Total capital", f"${deploy.total_capital:,.0f}")
-    w2.metric("Stock/options silo", f"${book.stock_options.equity:,.0f}")
-    w3.metric("Futures silo", f"${book.futures.equity:,.0f}")
+    if settings.show_futures:
+        w1, w2, w3 = st.columns(3)
+        w1.metric("Total capital", f"${deploy.total_capital:,.0f}")
+        w2.metric("Stock/options silo", f"${book.stock_options.equity:,.0f}")
+        w3.metric("Futures silo", f"${book.futures.equity:,.0f}")
+    else:
+        w1, w2 = st.columns(2)
+        w1.metric("Total capital", f"${deploy.total_capital:,.0f}")
+        w2.metric("Stock/options silo", f"${book.stock_options.equity:,.0f}")
     st.caption(f"As of {as_of_text}")
 
     if cards:
@@ -108,9 +111,7 @@ def render_dashboard(
                     "institution": card["institution"] or card["kind"],
                     "value": card["equity_value"],
                     "cash": card["cash"],
-                    "as_of": card["as_of"].strftime("%Y-%m-%d %H:%M")
-                    if card["as_of"]
-                    else "—",
+                    "as_of": card["as_of"].strftime("%Y-%m-%d %H:%M") if card["as_of"] else "—",
                     "sync": status,
                 }
             )
@@ -127,9 +128,7 @@ def render_dashboard(
         raw_stop, adj_stop = portfolio_slippage_adjusted_heat(holdings, repo, cal)
         if cal.status == "calibrated" and adj_stop > raw_stop:
             adj_heat = adj_stop / so.equity if so.equity > 0 else 0.0
-            r1.caption(
-                f"Heat (slippage-adj): ${adj_stop:,.0f} ({adj_heat:.0%} of cap)"
-            )
+            r1.caption(f"Heat (slippage-adj): ${adj_stop:,.0f} ({adj_heat:.0%} of cap)")
         elif cal.status == "calibrating":
             r1.caption("Slippage pad: calibrating (<10 exit observations)")
     r2.metric("Heat cap", f"{cfg.heat_cap:.0%}", cap_status_pct(so.heat, cfg.heat_cap))
@@ -153,17 +152,18 @@ def render_dashboard(
 
     concentrations = top_concentrations(holdings)
     if concentrations:
-        st.caption(
-            "Top concentrations: "
-            + " · ".join(f"{u} ${n:,.0f}" for u, n in concentrations)
-        )
+        st.caption("Top concentrations: " + " · ".join(f"{u} ${n:,.0f}" for u, n in concentrations))
 
-    stress = top_cluster_stress(
-        holdings,
-        repo,
-        equity=book.stock_options.equity,
-        stress_pct=settings.cluster_stress_pct,
-    ) if holdings else None
+    stress = (
+        top_cluster_stress(
+            holdings,
+            repo,
+            equity=book.stock_options.equity,
+            stress_pct=settings.cluster_stress_pct,
+        )
+        if holdings
+        else None
+    )
     if stress:
         gap_pct_label = abs(settings.cluster_stress_pct) * 100
         st.caption(
@@ -174,20 +174,18 @@ def render_dashboard(
 
     if holdings:
         flags = earnings_flags_for_positions(repo, holdings)
-        upcoming = [f for f in flags if f.earnings_date and f.days_until is not None and f.days_until <= 14]
+        upcoming = [
+            f for f in flags if f.earnings_date and f.days_until is not None and f.days_until <= 14
+        ]
         if upcoming:
             for flag in upcoming:
                 legs = f", {flag.option_legs_held} calls/puts held" if flag.option_legs_held else ""
                 src = " (manual)" if flag.source == "manual" else ""
-                st.caption(
-                    f"📅 **{flag.underlying}** earnings in {flag.days_until}d{legs}{src}"
-                )
+                st.caption(f"📅 **{flag.underlying}** earnings in {flag.days_until}d{legs}{src}")
         elif any(f.degraded for f in flags):
             st.caption("Earnings dates: degraded — set manual dates in Settings.")
 
-    pending_unclassified = [
-        e for e in pending_cash_events(repo)
-    ]
+    pending_unclassified = [e for e in pending_cash_events(repo)]
     if pending_unclassified:
         st.warning(
             f"**{len(pending_unclassified)} unclassified cash event(s)** — "
@@ -211,7 +209,7 @@ def render_dashboard(
         _render_positions_table(repo, settings, book, holdings)
 
     st.subheader("Silo exposure vs caps")
-    summary = pd.DataFrame([silo_book_row(book.stock_options), silo_book_row(book.futures)])
+    summary = pd.DataFrame(silo_exposure_rows(book, settings))
     st.dataframe(
         summary[
             [
@@ -394,8 +392,12 @@ def _render_positions_table(
                     repo.upsert_position_override(
                         symbol=str(row["underlying"]),
                         silo=Silo(row["silo"]),
-                        initial_stop=float(init) if init is not None and not pd.isna(init) else None,
-                        current_stop=float(curr) if curr is not None and not pd.isna(curr) else None,
+                        initial_stop=float(init)
+                        if init is not None and not pd.isna(init)
+                        else None,
+                        current_stop=float(curr)
+                        if curr is not None and not pd.isna(curr)
+                        else None,
                     )
             st.success("Stops saved.")
             st.rerun()
@@ -414,6 +416,8 @@ def _render_edge_card(events: list, settings: AppSettings, book: BookContext) ->
         return
     st.markdown("**Kelly step-up / risk appetite**")
     for rec in report.recommendations:
+        if not settings.show_futures and rec.silo == Silo.FUTURES:
+            continue
         action_colors = {
             RiskAction.STEP_UP_KELLY: "success",
             RiskAction.STEP_UP_BASE_F: "success",
@@ -424,7 +428,9 @@ def _render_edge_card(events: list, settings: AppSettings, book: BookContext) ->
         msg_fn = getattr(st, action_colors.get(rec.action, "info"))
         trades_needed = rec.edge.trades_needed_for_step_up
         extra = f" · {trades_needed} more trades needed" if trades_needed > 0 else ""
-        msg_fn(f"**{rec.silo.value}**: {rec.action.value.replace('_', ' ')} — {rec.narrative}{extra}")
+        msg_fn(
+            f"**{rec.silo.value}**: {rec.action.value.replace('_', ' ')} — {rec.narrative}{extra}"
+        )
         with st.expander(f"Edge stats — {rec.silo.value}"):
             st.text(rec.statistics)
 
@@ -438,6 +444,8 @@ def _render_sizing_efficiency_card(events: list, settings: AppSettings) -> None:
     for seg in report.segments:
         if seg.rule != CounterfactualRule.KELLY_QUARTER:
             continue
+        if not settings.show_futures and seg.silo == Silo.FUTURES:
+            continue
         alpha_total += seg.alpha_left_on_table
     st.markdown("**Sizing efficiency (actual vs ¼ Kelly, ledger)**")
     st.metric("Alpha left on table (¼ Kelly)", f"${alpha_total:,.0f}")
@@ -445,6 +453,8 @@ def _render_sizing_efficiency_card(events: list, settings: AppSettings) -> None:
         rows = []
         for seg in report.segments:
             if seg.rule != CounterfactualRule.KELLY_QUARTER:
+                continue
+            if not settings.show_futures and seg.silo == Silo.FUTURES:
                 continue
             rows.append(
                 {

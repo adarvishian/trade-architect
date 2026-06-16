@@ -40,6 +40,7 @@ class AppSettings:
     capital_base_mode: str = "deployable"
     include_forward_income: bool = False
     capital_base_blend_pct: float = 0.5
+    show_futures: bool = False
     cluster_stress_pct: float = -0.15
     sizing: SizingConfig = field(default_factory=lambda: SizingConfig())
     adaptive_risk: AdaptiveRiskConfig = field(default_factory=lambda: AdaptiveRiskConfig())
@@ -123,6 +124,7 @@ def app_settings_to_dict(settings: AppSettings) -> dict[str, Any]:
         "capital_base_mode": settings.capital_base_mode,
         "include_forward_income": settings.include_forward_income,
         "capital_base_blend_pct": settings.capital_base_blend_pct,
+        "show_futures": settings.show_futures,
         "cluster_stress_pct": settings.cluster_stress_pct,
         "sizing": sizing_config_to_dict(settings.sizing),
         "adaptive_risk": adaptive_config_to_dict(settings.adaptive_risk),
@@ -165,6 +167,7 @@ def app_settings_from_dict(data: dict[str, Any]) -> AppSettings:
         capital_base_blend_pct=float(
             data.get("capital_base_blend_pct", defaults.capital_base_blend_pct)
         ),
+        show_futures=bool(data.get("show_futures", defaults.show_futures)),
         cluster_stress_pct=float(data.get("cluster_stress_pct", defaults.cluster_stress_pct)),
         sizing=sizing,
         adaptive_risk=adaptive,
@@ -213,6 +216,7 @@ def diff_app_settings(
             old.capital_base_blend_pct,
             new.capital_base_blend_pct,
         ),
+        ("show_futures", old.show_futures, new.show_futures),
         ("cluster_stress_pct", old.cluster_stress_pct, new.cluster_stress_pct),
     ]
     for name, old_val, new_val in scalar_fields:

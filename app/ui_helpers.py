@@ -12,6 +12,7 @@ import streamlit as st
 
 from trading_architect import __version__
 from trading_architect.config.defaults import DATA_DIR
+from trading_architect.config.user_settings import AppSettings
 from trading_architect.engines.book_context import BookContext, SiloBookState
 from trading_architect.engines.drawdown import DrawdownGovernorState
 from trading_architect.ingestion.schwab_auth import schwab_connection_status
@@ -118,7 +119,36 @@ def _governor_badge(state: DrawdownGovernorState) -> str:
     }[state]
 
 
-def render_governor_sidebar(book: BookContext, *, equity_as_of: str | None = None) -> None:
+def silo_choices(settings: AppSettings) -> list[str]:
+    """Silo options for UI selectors — futures omitted when deferred for v1."""
+    choices = ["stock_options"]
+    if settings.show_futures:
+        choices.append("futures")
+    return choices
+
+
+def asset_choices(settings: AppSettings) -> list[str]:
+    """Asset types for the sizer — future omitted when futures silo is hidden."""
+    choices = ["stock", "option"]
+    if settings.show_futures:
+        choices.append("future")
+    return choices
+
+
+def silo_exposure_rows(book: BookContext, settings: AppSettings) -> list[dict]:
+    """Dashboard silo summary rows, respecting the futures visibility gate."""
+    rows = [silo_book_row(book.stock_options)]
+    if settings.show_futures:
+        rows.append(silo_book_row(book.futures))
+    return rows
+
+
+def render_governor_sidebar(
+    book: BookContext,
+    *,
+    equity_as_of: str | None = None,
+    show_futures: bool = False,
+) -> None:
     """Always-visible drawdown governor (FR-7.4)."""
     st.sidebar.markdown("---")
     st.sidebar.subheader("Drawdown governor")
@@ -134,10 +164,10 @@ def render_governor_sidebar(book: BookContext, *, equity_as_of: str | None = Non
         st.sidebar.caption("Within tolerance — full sizing available.")
 
     as_of_note = f" · as of {equity_as_of}" if equity_as_of else ""
-    for label, state in (
-        ("Stock/options", book.stock_options),
-        ("Futures", book.futures),
-    ):
+    silo_labels: list[tuple[str, SiloBookState]] = [("Stock/options", book.stock_options)]
+    if show_futures:
+        silo_labels.append(("Futures", book.futures))
+    for label, state in silo_labels:
         st.sidebar.caption(
             f"{label}: ${state.equity:,.0f}{as_of_note} · DD {state.drawdown_pct:.1%} · "
             f"heat {state.heat:.0%}/{state.heat_cap:.0%} · lev {state.leverage:.1f}×/{state.leverage_cap:.1f}×"
