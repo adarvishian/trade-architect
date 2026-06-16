@@ -21,6 +21,7 @@ from trading_architect.config.defaults import (
     DEFAULT_ASSUMED_CORRELATION,
     DEFAULT_CORRELATION_THRESHOLD,
 )
+from trading_architect.models.entities import AssetType, TradeEvent
 
 logger = logging.getLogger(__name__)
 
@@ -155,3 +156,46 @@ def max_correlation_to_group(
     Returns 0.0 for an empty group (nothing to be correlated with)."""
     values = [provider.correlation(underlying, member) for member in group]
     return max(values) if values else 0.0
+
+
+def returns_from_events(events: list[TradeEvent]) -> dict[str, list[float]]:
+    """Build per-underlying daily return series from stock trade prices."""
+    prices_by_underlying: dict[str, dict] = {}
+    for event in sorted(events, key=lambda ev: ev.timestamp):
+        if event.asset_type != AssetType.STOCK:
+            continue
+        underlying = event.underlying.upper()
+        day = event.timestamp.date()
+        prices_by_underlying.setdefault(underlying, {})[day] = event.price
+
+    returns: dict[str, list[float]] = {}
+    for underlying, by_day in prices_by_underlying.items():
+        days = sorted(by_day)
+        if len(days) < 2:
+            continue
+        series: list[float] = []
+        for prev_day, day in zip(days, days[1:]):
+            prev_price = by_day[prev_day]
+            price = by_day[day]
+            if prev_price > 0:
+                series.append((price - prev_price) / prev_price)
+        if series:
+            returns[underlying] = series
+    return returns
+
+
+def correlation_provider_from_events(
+    events: list[TradeEvent],
+    *,
+    default_correlation: float = DEFAULT_ASSUMED_CORRELATION,
+    min_observations: int = DEFAULT_MIN_OBSERVATIONS,
+) -> CorrelationProvider:
+    """Return-series provider when history exists; conservative fallback otherwise."""
+    returns = returns_from_events(events)
+    if returns:
+        return ReturnsCorrelationProvider(
+            returns,
+            default_correlation=default_correlation,
+            min_observations=min_observations,
+        )
+    return ConservativeCorrelationProvider(default_correlation=default_correlation)

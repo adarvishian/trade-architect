@@ -68,6 +68,7 @@ def render_option_selector_branch(
             book.exposure_for_silo(Silo.STOCK_OPTIONS),
             config=settings.option_selector,
             events=events,
+            positions=repo.list_positions(),
             top_n=6,
         )
 

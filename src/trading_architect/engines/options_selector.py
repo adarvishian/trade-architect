@@ -321,12 +321,28 @@ def rank_contracts(
     config: OptionSelectorConfig | None = None,
     sizing_config: SizingConfig | None = None,
     events=None,
+    positions=None,
+    marks_provider=None,
     top_n: int = 8,
 ) -> OptionSelectorResult:
     """Score, rank, and attach sizing for candidate contracts."""
     cfg = config or DEFAULT_OPTION_SELECTOR_CONFIG
     sz_cfg = sizing_config or DEFAULT_SIZING_CONFIG
     weights = cfg.scoring_weights.normalized()
+
+    drawdown_correlation = 1.0
+    if positions is not None and events is not None:
+        from trading_architect.services.drawdown_attribution import (
+            candidate_drawdown_correlation_for_sizing,
+        )
+
+        drawdown_correlation = candidate_drawdown_correlation_for_sizing(
+            inputs.underlying.upper(),
+            positions,
+            events,
+            silo=Silo.STOCK_OPTIONS,
+            marks_provider=marks_provider,
+        )
 
     candidates = enumerate_candidates(snapshot, inputs, cfg)
     if not candidates:
@@ -449,6 +465,7 @@ def rank_contracts(
             exposure,
             config=sz_cfg,
             events=events,
+            drawdown_correlation=drawdown_correlation,
         )
 
         notes = _build_tradeoff_notes(

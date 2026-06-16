@@ -374,13 +374,32 @@ def main() -> None:
             atr=args.atr,
             symbol=args.underlying.upper(),
         )
+        events = repo.list_events()
+        positions = repo.list_positions()
+        from trading_architect.engines.marks import default_marks_provider
+        from trading_architect.services.drawdown_attribution import (
+            candidate_drawdown_correlation_for_sizing,
+        )
+
+        dd_corr = candidate_drawdown_correlation_for_sizing(
+            args.underlying.upper(),
+            positions,
+            events,
+            silo=silo,
+            marks_provider=default_marks_provider(),
+        )
         exposure = SiloExposure(
             silo_equity=args.equity,
             open_dollar_risk=args.open_risk,
             open_delta_notional=args.open_notional,
             drawdown_pct=args.drawdown,
         )
-        rec = recommend_size(candidate, exposure, events=repo.list_events())
+        rec = recommend_size(
+            candidate,
+            exposure,
+            events=events,
+            drawdown_correlation=dd_corr,
+        )
         print(format_size_recommendation(rec))
     elif args.command == "evaluate":
         from trading_architect.engines.evaluation import evaluate_alpha_left, format_report_summary

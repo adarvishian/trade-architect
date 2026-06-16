@@ -685,7 +685,25 @@ elif page == "Size a Trade":
             symbol=underlying,
         )
         exposure = book.exposure_for_silo(silo, repo=repo, settings=settings)
-        rec = recommend_size(candidate, exposure, config=settings.sizing, events=events)
+        from trading_architect.engines.marks import default_marks_provider
+        from trading_architect.services.drawdown_attribution import (
+            candidate_drawdown_correlation_for_sizing,
+        )
+
+        dd_corr = candidate_drawdown_correlation_for_sizing(
+            underlying,
+            positions,
+            events,
+            silo=silo,
+            marks_provider=default_marks_provider(),
+        )
+        rec = recommend_size(
+            candidate,
+            exposure,
+            config=settings.sizing,
+            events=events,
+            drawdown_correlation=dd_corr,
+        )
         repo.record_size_recommendation(
             ts=datetime.now(timezone.utc),
             silo=silo,

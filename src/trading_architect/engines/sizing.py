@@ -760,6 +760,8 @@ def recommend_size(
         target_analyses=target_analyses,
         option_delta_used=option_delta_used,
     )
+    if throttle_msg:
+        rationale = throttle_msg + "\n\n" + rationale
     if exposure.capital_base_detail:
         rationale = exposure.capital_base_detail + "\n\n" + rationale
 

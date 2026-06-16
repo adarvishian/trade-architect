@@ -141,6 +141,47 @@ def open_mtm_pnl(
     return total
 
 
+def open_pnl_by_underlying(
+    positions: list[Position],
+    marks_by_symbol: dict[str, float],
+    events: list[TradeEvent],
+) -> dict[str, float]:
+    """Aggregate unrealized P&L per underlying for open positions."""
+    events_by_symbol = {e.symbol: e for e in sorted(events, key=lambda ev: ev.timestamp)}
+    by_underlying: dict[str, float] = defaultdict(float)
+    for pos in positions:
+        if pos.status != PositionStatus.OPEN:
+            continue
+        for symbol, qty in pos.leg_net_qty.items():
+            if qty == 0:
+                continue
+            cost = pos.blended_cost_basis.get(symbol, 0.0)
+            mark = marks_by_symbol.get(symbol, cost)
+            asset_type = _leg_asset_type(symbol, pos, events_by_symbol)
+            if asset_type == AssetType.OPTION:
+                pnl = (mark - cost) * qty * OPTION_CONTRACT_MULTIPLIER
+            elif asset_type == AssetType.FUTURE:
+                mult = futures_multiplier(symbol)
+                pnl = (mark - cost) * qty * mult
+            else:
+                pnl = (mark - cost) * qty
+            by_underlying[pos.underlying] += pnl
+    return dict(by_underlying)
+
+
+def open_pnl_by_underlying_for_silo(
+    events: list[TradeEvent],
+    positions: list[Position],
+    silo: Silo,
+    marks_provider=None,
+) -> dict[str, float]:
+    """Open MTM P&L per underlying for a silo using live marks when available."""
+    open_positions = [p for p in positions if p.silo == silo and p.status == PositionStatus.OPEN]
+    silo_events = [e for e in events if e.silo == silo]
+    marks, _ = _marks_with_provider(silo_events, open_positions, marks_provider)
+    return open_pnl_by_underlying(open_positions, marks, silo_events)
+
+
 def reconstruct_silo_equity_curve(
     events: list[TradeEvent],
     positions: list[Position],
