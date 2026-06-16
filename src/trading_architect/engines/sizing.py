@@ -48,6 +48,8 @@ class CandidateTrade:
     premium_per_contract: float | None = None
     spot_price: float | None = None
     option_delta: float | None = None
+    target_prices: tuple[float, ...] | None = None
+    projected_premium_at_targets: tuple[float, ...] | None = None
     symbol: str | None = None
     atr: float | None = None
 
@@ -83,6 +85,16 @@ class LayerResult:
     detail: str = ""
 
 
+@dataclass(frozen=True)
+class TargetRewardRisk:
+    """Reward:risk and expected R-multiple for one price target."""
+
+    target_price: float
+    reward_per_unit: float
+    reward_risk_ratio: float
+    r_multiple: float
+
+
 @dataclass
 class SizeRecommendation:
     recommended_qty: float
@@ -98,6 +110,10 @@ class SizeRecommendation:
     warnings: list[str] = field(default_factory=list)
     capital_base: float | None = None
     capital_base_detail: str | None = None
+    reward_risk_ratio: float | None = None
+    target_analyses: list[TargetRewardRisk] = field(default_factory=list)
+    dollar_reward_at_target: float | None = None
+    option_delta_used: float | None = None
 
 
 def _effective_f_for_equity(
@@ -109,6 +125,72 @@ def _effective_f_for_equity(
         return base_f, "base tier"
     tier = applicable[-1]
     return base_f * tier.f_multiplier, tier.label or f"≥${tier.min_equity:,.0f}"
+
+
+def _option_delta_used(candidate: CandidateTrade) -> float:
+    """Delta magnitude used for notional/leverage (0.5 fallback when unknown)."""
+    if candidate.option_delta is not None:
+        return abs(candidate.option_delta)
+    return 0.5
+
+
+def _compute_target_analyses(
+    candidate: CandidateTrade,
+    rpu: float,
+) -> list[TargetRewardRisk]:
+    """Reward:risk and expected R-multiple per target (PRD R2.1)."""
+    if not candidate.target_prices or rpu <= 0:
+        return []
+
+    projected_by_target: dict[float, float] = {}
+    if candidate.projected_premium_at_targets:
+        for target, projected in zip(
+            candidate.target_prices,
+            candidate.projected_premium_at_targets,
+            strict=False,
+        ):
+            projected_by_target[target] = projected
+
+    symbol = candidate.symbol or candidate.underlying
+    mult = (
+        futures_multiplier(symbol)
+        if candidate.asset_type == AssetType.FUTURE
+        else 1.0
+    )
+    analyses: list[TargetRewardRisk] = []
+
+    for target in candidate.target_prices:
+        if candidate.asset_type == AssetType.OPTION:
+            premium = candidate.premium_per_contract or candidate.entry_price
+            if premium <= 0:
+                continue
+            if target in projected_by_target:
+                projected_premium = projected_by_target[target]
+            else:
+                spot = candidate.spot_price or candidate.entry_price
+                delta = _option_delta_used(candidate)
+                projected_premium = premium + delta * (target - spot)
+            reward_per_unit = (projected_premium - premium) * OPTION_CONTRACT_MULTIPLIER
+            r_mult = (projected_premium - premium) / premium
+            rr = r_mult
+        else:
+            if candidate.direction == Direction.LONG:
+                reward_per_unit = (target - candidate.entry_price) * mult
+            else:
+                reward_per_unit = (candidate.entry_price - target) * mult
+            rr = reward_per_unit / rpu if rpu > 0 else 0.0
+            r_mult = rr
+
+        analyses.append(
+            TargetRewardRisk(
+                target_price=target,
+                reward_per_unit=reward_per_unit,
+                reward_risk_ratio=rr,
+                r_multiple=r_mult,
+            )
+        )
+
+    return analyses
 
 
 def _risk_per_unit(candidate: CandidateTrade) -> tuple[float, str]:
@@ -131,8 +213,7 @@ def _notional_per_unit(candidate: CandidateTrade) -> float:
     symbol = candidate.symbol or candidate.underlying
 
     if candidate.asset_type == AssetType.OPTION:
-        delta = candidate.option_delta if candidate.option_delta is not None else 0.5
-        return abs(delta) * OPTION_CONTRACT_MULTIPLIER * spot
+        return _option_delta_used(candidate) * OPTION_CONTRACT_MULTIPLIER * spot
 
     if candidate.asset_type == AssetType.FUTURE:
         return candidate.entry_price * futures_multiplier(symbol)
@@ -324,7 +405,7 @@ def _apply_heat_leverage_caps(
     spot = candidate.spot_price or candidate.entry_price
 
     if candidate.asset_type == AssetType.OPTION:
-        delta = candidate.option_delta if candidate.option_delta is not None else 0.5
+        delta = _option_delta_used(candidate)
         delta_notional = delta_adjusted_notional(0, spot, [(qty_final, delta)])
     elif candidate.asset_type == AssetType.STOCK:
         delta_notional = qty_final * spot
@@ -454,6 +535,8 @@ def _build_rationale(
     binding: BindingConstraint,
     cfg: SizingConfig,
     max_qty_heat: float,
+    target_analyses: list[TargetRewardRisk],
+    option_delta_used: float | None,
 ) -> str:
     unit_label = "contracts" if candidate.asset_type != AssetType.STOCK else "shares"
     rationale_parts = [
@@ -462,6 +545,26 @@ def _build_rationale(
         f"Dollar risk **${dollar_risk:,.0f}**; delta-notional **${delta_notional:,.0f}**.",
         f"Post-trade heat **{heat_after:.1%}**, leverage **{lev_after:.2f}×**.",
     ]
+
+    if candidate.asset_type == AssetType.OPTION and option_delta_used is not None:
+        source = "supplied" if candidate.option_delta is not None else "default 0.5"
+        rationale_parts.append(f"Option delta used: **{option_delta_used:.2f}** ({source}).")
+
+    if target_analyses:
+        target_lines = []
+        for analysis in target_analyses:
+            target_lines.append(
+                f"Target **${analysis.target_price:,.2f}** → "
+                f"R:R **{analysis.reward_risk_ratio:+.2f}** "
+                f"({analysis.r_multiple:+.2f}R expected)"
+            )
+        rationale_parts.append("Reward:risk:\n" + "\n".join(f"• {line}" for line in target_lines))
+        primary = target_analyses[0]
+        dollar_reward = primary.reward_per_unit * qty_final
+        rationale_parts.append(
+            f"At recommended size, reward at primary target: **${dollar_reward:,.0f}** "
+            f"({primary.r_multiple:+.2f}R on ${dollar_risk:,.0f} risk)."
+        )
 
     if binding == BindingConstraint.HEAT_CAP and qty_final == 0 and max_qty_heat <= 0:
         rationale_parts.append(
@@ -515,6 +618,10 @@ def recommend_size(
     warnings: list[str] = []
 
     rpu, risk_basis = _risk_per_unit(candidate)
+    target_analyses = _compute_target_analyses(candidate, rpu)
+    option_delta_used = (
+        _option_delta_used(candidate) if candidate.asset_type == AssetType.OPTION else None
+    )
     if rpu <= 0:
         return SizeRecommendation(
             recommended_qty=0.0,
@@ -525,6 +632,9 @@ def recommend_size(
             rationale=f"Cannot size: invalid risk basis ({risk_basis}).",
             layers=layers,
             warnings=["Provide a stop for stock/futures or premium for options."],
+            target_analyses=target_analyses,
+            reward_risk_ratio=target_analyses[0].reward_risk_ratio if target_analyses else None,
+            option_delta_used=option_delta_used,
         )
 
     corr_to_source = drawdown_correlation if cfg.attribution_aware_governor else 1.0
@@ -588,7 +698,7 @@ def recommend_size(
     dollar_risk = qty_after_cash * rpu
     spot = candidate.spot_price or candidate.entry_price
     if candidate.asset_type == AssetType.OPTION:
-        delta = candidate.option_delta if candidate.option_delta is not None else 0.5
+        delta = _option_delta_used(candidate)
         delta_notional = delta_adjusted_notional(0, spot, [(qty_after_cash, delta)])
     elif candidate.asset_type == AssetType.STOCK:
         delta_notional = qty_after_cash * spot
@@ -622,9 +732,17 @@ def recommend_size(
         binding=binding,
         cfg=cfg,
         max_qty_heat=cap_out.max_qty_heat,
+        target_analyses=target_analyses,
+        option_delta_used=option_delta_used,
     )
     if exposure.capital_base_detail:
         rationale = exposure.capital_base_detail + "\n\n" + rationale
+
+    dollar_reward = None
+    reward_rr = None
+    if target_analyses:
+        reward_rr = target_analyses[0].reward_risk_ratio
+        dollar_reward = target_analyses[0].reward_per_unit * qty_after_cash
 
     return SizeRecommendation(
         recommended_qty=qty_after_cash,
@@ -640,6 +758,10 @@ def recommend_size(
         warnings=warnings,
         capital_base=capital,
         capital_base_detail=exposure.capital_base_detail,
+        reward_risk_ratio=reward_rr,
+        target_analyses=target_analyses,
+        dollar_reward_at_target=dollar_reward,
+        option_delta_used=option_delta_used,
     )
 
 
@@ -661,6 +783,12 @@ def format_size_recommendation(rec: SizeRecommendation) -> str:
             f"Heat after: {rec.heat_after:.1%} | Leverage after: {rec.leverage_after:.2f}×",
         ]
     )
+    if rec.reward_risk_ratio is not None:
+        lines.append(f"Reward:risk: {rec.reward_risk_ratio:+.2f}")
+    if rec.option_delta_used is not None:
+        lines.append(f"Option delta used: {rec.option_delta_used:.2f}")
+    if rec.dollar_reward_at_target is not None:
+        lines.append(f"Reward at target (recommended size): ${rec.dollar_reward_at_target:,.0f}")
     if rec.kelly_target_f is not None:
         lines.append(f"Kelly target f: {rec.kelly_target_f:.3%}")
     lines.append("")

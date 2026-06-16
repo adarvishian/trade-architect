@@ -91,6 +91,7 @@ def render_option_selector_branch(
                     "score": round(item.composite_score, 3),
                     "proj_return_%": round(item.projected_return_pct, 1),
                     "proj_R": round(item.projected_r_multiple, 2),
+                    "R:R": round(sr.reward_risk_ratio, 2) if sr and sr.reward_risk_ratio is not None else None,
                     "contracts": sr.recommended_qty_int if sr else 0,
                     "delta": c.delta,
                     "theta": c.theta,
@@ -111,7 +112,9 @@ def render_option_selector_branch(
 
         schwab_status = schwab_connection_status()
         if not schwab_status.get("token"):
-            st.error("Schwab not connected. Complete OAuth setup under Accounts → Backfill history.")
+            st.error(
+                "Schwab not connected. Complete OAuth setup under Accounts → Backfill history."
+            )
         else:
             with st.spinner(f"Fetching {underlying} option chain from Schwab..."):
                 try:

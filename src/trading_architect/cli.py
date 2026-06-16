@@ -102,6 +102,7 @@ def main() -> None:
     sz.add_argument("--premium", type=float, help="Option premium per contract")
     sz.add_argument("--spot", type=float, help="Underlying spot (defaults to entry)")
     sz.add_argument("--delta", type=float, help="Option delta at entry")
+    sz.add_argument("--target", type=float, action="append", help="Price target (repeatable)")
     sz.add_argument("--atr", type=float, help="Instrument ATR for vol normalization")
     sz.add_argument(
         "--asset",
@@ -369,6 +370,7 @@ def main() -> None:
             premium_per_contract=args.premium,
             spot_price=args.spot or args.entry,
             option_delta=args.delta,
+            target_prices=tuple(args.target) if args.target else None,
             atr=args.atr,
             symbol=args.underlying.upper(),
         )

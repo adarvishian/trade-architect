@@ -443,6 +443,8 @@ def rank_contracts(
                 premium_per_contract=premium,
                 spot_price=snapshot.spot_price,
                 option_delta=delta if contract.right == "C" else -delta,
+                target_prices=(inputs.target_price,),
+                projected_premium_at_targets=(row["projected"],),
             ),
             exposure,
             config=sz_cfg,

@@ -615,6 +615,13 @@ elif page == "Size a Trade":
     underlying = st.text_input("Underlying", "AAPL", key="size_underlying").upper()
     entry = st.number_input("Entry price", value=100.0, min_value=0.01, key="size_entry")
     spot = st.number_input("Spot (optional)", value=0.0, min_value=0.0, key="size_spot")
+    target = st.number_input(
+        "Price target",
+        value=115.0,
+        min_value=0.01,
+        key="size_target",
+        help="Underlying price target for reward:risk (stock stop→target; option uses delta or selector BS).",
+    )
 
     stop = premium = delta = None
     if asset_val == "option":
@@ -666,6 +673,7 @@ elif page == "Size a Trade":
             premium_per_contract=premium,
             spot_price=spot or entry,
             option_delta=delta,
+            target_prices=(target,),
             atr=atr if atr > 0 else None,
             symbol=underlying,
         )
@@ -683,6 +691,7 @@ elif page == "Size a Trade":
                 {
                     "entry": entry,
                     "stop": stop,
+                    "target": target,
                     "premium": premium,
                     "spot": spot or entry,
                     "delta": delta,
@@ -691,11 +700,16 @@ elif page == "Size a Trade":
             silo_equity=silo_state.equity,
         )
         st.metric("Recommended size", f"{rec.recommended_qty_int:,} units")
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Dollar risk", f"${rec.dollar_risk:,.0f}")
-        m2.metric("Delta notional", f"${rec.delta_notional:,.0f}")
-        m3.metric("Heat after", f"{rec.heat_after:.1%}")
-        m4.metric("Leverage after", f"{rec.leverage_after:.2f}×")
+        m2.metric("Reward:risk", f"{rec.reward_risk_ratio:+.2f}" if rec.reward_risk_ratio is not None else "—")
+        m3.metric("Delta notional", f"${rec.delta_notional:,.0f}")
+        m4.metric("Heat after", f"{rec.heat_after:.1%}")
+        m5.metric("Leverage after", f"{rec.leverage_after:.2f}×")
+        if rec.option_delta_used is not None:
+            st.caption(f"Option delta used: **{rec.option_delta_used:.2f}**")
+        if rec.dollar_reward_at_target is not None:
+            st.caption(f"Reward at target (recommended size): **${rec.dollar_reward_at_target:,.0f}**")
         st.info(rec.rationale)
         st.write(f"**Binding constraint:** `{rec.binding_constraint.value}`")
         if rec.warnings:
