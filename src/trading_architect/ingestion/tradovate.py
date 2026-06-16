@@ -25,13 +25,14 @@ class TradovateAdapter(BrokerAdapter):
         self, path: Path, account: str | None = None
     ) -> tuple[list[TradeEvent], list[ReviewQueueItem]]:
         account = account or "tradovate"
-        df = read_broker_csv(path)
+        df, parse_review = read_broker_csv(path)
         df.columns = [c.strip() for c in df.columns]
 
         if self._is_performance_export(df):
-            return self._parse_performance(df, path.name, account)
-
-        return self._parse_fills(df, path.name, account)
+            events, review = self._parse_performance(df, path.name, account)
+        else:
+            events, review = self._parse_fills(df, path.name, account)
+        return events, parse_review + review
 
     def _is_performance_export(self, df: pd.DataFrame) -> bool:
         cols = {c.lower() for c in df.columns}

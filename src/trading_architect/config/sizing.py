@@ -11,6 +11,7 @@ from trading_architect.config.defaults import (
     DEFAULT_HEAT_CAP,
     DEFAULT_KELLY_FRACTION,
     DEFAULT_LEVERAGE_CAP,
+    DEFAULT_MIN_TRADES_FOR_KELLY,
     DRAWDOWN_HARD_CAP,
     DRAWDOWN_SOFT_ALERT,
     DRAWDOWN_THROTTLE_START,
@@ -34,6 +35,7 @@ class SizingConfig:
     leverage_cap: float = DEFAULT_LEVERAGE_CAP
     reference_atr: float | None = None
     use_kelly_lower_ci: bool = True
+    min_trades_for_kelly: int = DEFAULT_MIN_TRADES_FOR_KELLY
     bootstrap_samples: int = 500
     equity_tiers: list[EquityTier] = field(
         default_factory=lambda: [

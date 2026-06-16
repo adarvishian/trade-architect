@@ -20,6 +20,8 @@ class OpenLot:
     stop_price: float | None
     open_event_id: str
     fees_per_unit: float = 0.0
+    option_delta: float | None = None
+    spot_at_entry: float | None = None
 
 
 @dataclass
@@ -129,6 +131,18 @@ def extract_closed_entries(events: list[TradeEvent]) -> list[ClosedTradeEntry]:
                     stop_price=event.stop_price,
                     open_event_id=event.event_id or event.natural_key,
                     fees_per_unit=event.fees / event.quantity if event.quantity else 0.0,
+                    option_delta=(
+                        event.option_spec.delta_at_entry
+                        if event.asset_type == AssetType.OPTION and event.option_spec
+                        else None
+                    ),
+                    spot_at_entry=(
+                        event.option_spec.strike
+                        if event.asset_type == AssetType.OPTION and event.option_spec
+                        else event.price
+                        if event.asset_type == AssetType.STOCK
+                        else None
+                    ),
                 )
             )
             net_by_leg[leg_key] = net + signed
@@ -170,18 +184,8 @@ def extract_closed_entries(events: list[TradeEvent]) -> list[ClosedTradeEntry]:
                     "stop_price": lot.stop_price,
                     "open_event_id": lot.open_event_id,
                     "close_event_id": event.event_id or event.natural_key,
-                    "spot_at_entry": (
-                        event.option_spec.strike
-                        if event.asset_type == AssetType.OPTION and event.option_spec
-                        else lot.entry_price
-                        if event.asset_type == AssetType.STOCK
-                        else None
-                    ),
-                    "option_delta": (
-                        event.option_spec.delta_at_entry
-                        if event.asset_type == AssetType.OPTION and event.option_spec
-                        else None
-                    ),
+                    "spot_at_entry": lot.spot_at_entry,
+                    "option_delta": lot.option_delta,
                 }
             )
 
@@ -201,6 +205,18 @@ def extract_closed_entries(events: list[TradeEvent]) -> list[ClosedTradeEntry]:
                     stop_price=event.stop_price,
                     open_event_id=event.event_id or event.natural_key,
                     fees_per_unit=event.fees / event.quantity if event.quantity else 0.0,
+                    option_delta=(
+                        event.option_spec.delta_at_entry
+                        if event.asset_type == AssetType.OPTION and event.option_spec
+                        else None
+                    ),
+                    spot_at_entry=(
+                        event.option_spec.strike
+                        if event.asset_type == AssetType.OPTION and event.option_spec
+                        else event.price
+                        if event.asset_type == AssetType.STOCK
+                        else None
+                    ),
                 )
             )
 

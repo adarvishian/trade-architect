@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
-from trading_architect.models.entities import AssetType, OptionSpec
+from trading_architect.models.entities import AssetType, OptionSpec, ReviewQueueItem
 
 
 def parse_money(value) -> float:
@@ -60,9 +63,65 @@ def parse_timestamp(value) -> datetime:
     return normalize_timestamp(pd.to_datetime(text).to_pydatetime())
 
 
-def read_broker_csv(path) -> pd.DataFrame:
+def _review_malformed_line(
+    source_file: str,
+    row_index: int,
+    fields: list[str],
+    expected_fields: int,
+    *,
+    reason: str | None = None,
+) -> ReviewQueueItem:
+    detail = reason or f"malformed CSV line ({len(fields)} fields, expected {expected_fields})"
+    return ReviewQueueItem(
+        source_file=source_file,
+        row_index=row_index,
+        reason=detail,
+        raw_row={"raw_line": ",".join(fields)},
+    )
+
+
+def _pandas_fallback_with_review(path: Path) -> tuple[pd.DataFrame, list[ReviewQueueItem]]:
+    """Parse CSV via pandas when DictReader yields no rows; route bad lines to review."""
+    source = Path(path).name
+    review: list[ReviewQueueItem] = []
+
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        text = handle.read()
+
+    if not text.strip():
+        return pd.DataFrame(), review
+
+    try:
+        df = pd.read_csv(io.StringIO(text), engine="python")
+        return df, review
+    except pd.errors.ParserError:
+        pass
+
+    reader = csv.reader(io.StringIO(text))
+    try:
+        header = next(reader)
+    except StopIteration:
+        return pd.DataFrame(), review
+
+    expected = len(header)
+    good_rows: list[dict[str, str]] = []
+    for line_num, fields in enumerate(reader, start=2):
+        if not fields or all(not f.strip() for f in fields):
+            continue
+        if len(fields) != expected:
+            review.append(
+                _review_malformed_line(source, line_num, fields, expected),
+            )
+            continue
+        good_rows.append(dict(zip(header, fields, strict=False)))
+
+    return pd.DataFrame(good_rows), review
+
+
+def read_broker_csv(path) -> tuple[pd.DataFrame, list[ReviewQueueItem]]:
     """Read broker CSV with tolerant quoting for multiline Robinhood fields."""
-    import csv
+    source = Path(path).name
+    review: list[ReviewQueueItem] = []
 
     with open(path, newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -76,8 +135,8 @@ def read_broker_csv(path) -> pd.DataFrame:
                 continue
             rows.append(row)
     if not rows:
-        return pd.read_csv(path, engine="python", on_bad_lines="skip")
-    return pd.DataFrame(rows)
+        return _pandas_fallback_with_review(path)
+    return pd.DataFrame(rows), review
 
 
 OPTION_DESC_PATTERN = re.compile(

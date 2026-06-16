@@ -30,11 +30,11 @@ class RobinhoodAdapter(BrokerAdapter):
         self, path: Path, account: str | None = None
     ) -> tuple[list[TradeEvent], list[ReviewQueueItem]]:
         account = account or "robinhood-individual"
-        df = read_broker_csv(path)
+        df, parse_review = read_broker_csv(path)
         df.columns = [c.strip() for c in df.columns]
 
         events: list[TradeEvent] = []
-        review: list[ReviewQueueItem] = []
+        review: list[ReviewQueueItem] = list(parse_review)
         source = path.name
 
         for idx, row in df.iterrows():

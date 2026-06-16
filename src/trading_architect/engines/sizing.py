@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from enum import Enum
 
-from trading_architect.assembly.entries import extract_closed_entries
+from trading_architect.assembly.entries import ClosedTradeEntry, extract_closed_entries
 from trading_architect.assembly.positions import futures_multiplier
 from trading_architect.config.defaults import DEFAULT_EPOCHS, OPTION_CONTRACT_MULTIPLIER
 from trading_architect.config.sizing import DEFAULT_SIZING_CONFIG, EquityTier, SizingConfig
 from trading_architect.engines.drawdown import attribution_aware_throttle
+from trading_architect.ingestion.base import resolve_epoch_id
 from trading_architect.engines.formulas import (
     delta_adjusted_notional,
     dollar_risk_stock,
@@ -221,35 +223,50 @@ def _notional_per_unit(candidate: CandidateTrade) -> float:
     return spot
 
 
+def _prior_epoch_r_values(
+    entries: list[ClosedTradeEntry],
+    silo: Silo,
+    current_epoch: str,
+) -> list[float] | None:
+    """Out-of-sample R-multiples from the epoch immediately before ``current_epoch``."""
+    epoch_ids = [e.epoch_id for e in DEFAULT_EPOCHS]
+    if current_epoch not in epoch_ids:
+        return None
+    idx = epoch_ids.index(current_epoch)
+    if idx == 0:
+        return None
+    prior_epoch = epoch_ids[idx - 1]
+    prior_r = [
+        e.realized_r
+        for e in entries
+        if e.silo == silo and e.epoch_id == prior_epoch and e.realized_r is not None
+    ]
+    return prior_r or None
+
+
 def _optimal_f_for_silo(
     events: list[TradeEvent],
     silo: Silo,
     config: SizingConfig,
 ) -> tuple[float | None, float | None]:
-    """Point optimal-f and optional lower-CI bound from post-change epoch when possible."""
+    """Prior-epoch optimal-f and optional lower-CI bound (PRD R3.1 / D3)."""
     entries = extract_closed_entries(events)
-    post_epoch = DEFAULT_EPOCHS[-1].epoch_id if DEFAULT_EPOCHS else None
-    seg = [
-        e
-        for e in entries
-        if e.silo == silo
-        and e.realized_r is not None
-        and (post_epoch is None or e.epoch_id == post_epoch)
-    ]
-    if len(seg) < 3:
-        seg = [e for e in entries if e.silo == silo and e.realized_r is not None]
-
-    r_vals = [e.realized_r for e in seg if e.realized_r is not None]
-    if not r_vals:
+    silo_entries = [e for e in entries if e.silo == silo and e.realized_r is not None]
+    if len(silo_entries) < config.min_trades_for_kelly:
         return None, None
 
-    dist = compute_r_distribution(r_vals)
-    if not dist:
+    current_epoch = resolve_epoch_id(date.today())
+    prior_r = _prior_epoch_r_values(entries, silo, current_epoch)
+    if not prior_r:
+        return None, None
+
+    dist = compute_r_distribution(prior_r)
+    if not dist or dist.optimal_f <= 0:
         return None, None
 
     lower = None
     if config.use_kelly_lower_ci:
-        lower = bootstrap_optimal_f_lower(r_vals, n_bootstrap=config.bootstrap_samples)
+        lower = bootstrap_optimal_f_lower(prior_r, n_bootstrap=config.bootstrap_samples)
 
     return dist.optimal_f, lower
 
@@ -334,7 +351,11 @@ def _compute_sizing_layers(
         )
         kelly_f_used = base_kelly_f * cfg.kelly_fraction * throttle_mult
         qty_l3 = fractional_risk_size(capital, kelly_f_used, rpu)
-        ci_note = "lower-CI optimal-f" if optimal_f_lower is not None else "point optimal-f"
+        ci_note = (
+            "prior-epoch lower-CI optimal-f"
+            if optimal_f_lower is not None and cfg.use_kelly_lower_ci
+            else "prior-epoch optimal-f"
+        )
         layers.append(
             LayerResult(
                 layer=3,
@@ -350,10 +371,14 @@ def _compute_sizing_layers(
                 layer=3,
                 name="Fractional Kelly",
                 recommended_qty=qty_l3,
-                detail="Skipped — insufficient closed-trade history for optimal-f",
+                detail="Skipped — insufficient closed-trade history for prior-epoch Kelly "
+                f"(need ≥{cfg.min_trades_for_kelly} closed trades and a prior methodology epoch)",
             )
         )
-        warnings.append("Kelly layer inactive until more closed trades exist in this silo.")
+        warnings.append(
+            f"Kelly layer inactive until ≥{cfg.min_trades_for_kelly} closed trades exist "
+            "and prior-epoch optimal-f is available."
+        )
 
     layers.append(
         LayerResult(

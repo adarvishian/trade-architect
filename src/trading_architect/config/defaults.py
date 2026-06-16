@@ -38,6 +38,7 @@ OPTION_CONTRACT_MULTIPLIER = 100
 # Sizing defaults (Phase 1 synthesis + PRD Appendix A)
 DEFAULT_BASE_RISK_F = 0.01  # 1% of silo equity per trade
 DEFAULT_KELLY_FRACTION = 0.25
+DEFAULT_MIN_TRADES_FOR_KELLY = 15
 DEFAULT_HEAT_CAP = 0.10  # 10% portfolio heat
 DEFAULT_LEVERAGE_CAP = 2.0  # delta-notional multiple of silo equity
 
