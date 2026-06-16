@@ -165,8 +165,9 @@ def _counterfactual_qty(
     # Leverage cap proxy: notional cannot exceed leverage_cap × equity (stock/options)
     if entry.silo == Silo.STOCK_OPTIONS and entry.asset_type.value != "option":
         notional_per_unit = entry.entry_price
-        max_qty = (DEFAULT_LEVERAGE_CAP * equity_at_entry) / notional_per_unit
-        target_qty = min(target_qty, max_qty)
+        if notional_per_unit > 0:
+            max_qty = (DEFAULT_LEVERAGE_CAP * equity_at_entry) / notional_per_unit
+            target_qty = min(target_qty, max_qty)
     elif entry.asset_type.value == "option":
         spot = entry.spot_at_entry or entry.entry_price
         delta = entry.option_delta if entry.option_delta is not None else 0.5

@@ -5,10 +5,10 @@ from datetime import datetime
 
 import pytest
 
-from trading_architect.assembly.entries import extract_closed_entries
-from trading_architect.engines.evaluation import CounterfactualRule, evaluate_alpha_left
+from trading_architect.assembly.entries import ClosedTradeEntry, extract_closed_entries
+from trading_architect.engines.evaluation import CounterfactualRule, _counterfactual_qty, evaluate_alpha_left
 from trading_architect.engines.r_distribution import compute_r_distribution
-from trading_architect.models.entities import AssetType, Side, Silo, TradeEvent
+from trading_architect.models.entities import AssetType, Direction, Side, Silo, TradeEvent
 
 
 def _stock_round_trip(qty: float, entry: float, exit: float, stop: float) -> list[TradeEvent]:
@@ -104,3 +104,40 @@ def test_counterfactual_preserves_entry_exit():
     # P&L scales linearly with qty — same entry/exit prices
     ratio = c.counterfactual_qty / c.actual_qty
     assert c.counterfactual_pnl == pytest.approx(c.actual_pnl * ratio)
+
+
+def test_counterfactual_qty_skips_leverage_cap_when_entry_price_zero():
+    """Zero entry price must not crash leverage-cap math."""
+    entry = ClosedTradeEntry(
+        entry_id="e1",
+        silo=Silo.STOCK_OPTIONS,
+        underlying="BAD",
+        symbol="BAD",
+        asset_type=AssetType.STOCK,
+        direction=Direction.LONG,
+        epoch_id="epoch",
+        opened_at=datetime(2025, 1, 10),
+        closed_at=datetime(2025, 1, 20),
+        quantity=10.0,
+        entry_price=0.0,
+        exit_price=1.0,
+        initial_risk=100.0,
+        risk_per_unit=10.0,
+        realized_pnl=10.0,
+        realized_r=0.1,
+        open_event_id="o1",
+        close_event_id="c1",
+        risk_basis="stop",
+    )
+    qty = _counterfactual_qty(entry, CounterfactualRule.FRACTIONAL_1PCT, 100_000.0, 0.1)
+    assert qty >= 0.0
+
+
+def test_evaluate_alpha_left_with_zero_entry_price():
+    events = _stock_round_trip(qty=10, entry=0, exit=1, stop=0.5)
+    report = evaluate_alpha_left(
+        events,
+        starting_equity={Silo.STOCK_OPTIONS: 100_000.0, Silo.FUTURES: 50_000.0},
+        rules=[CounterfactualRule.FRACTIONAL_1PCT],
+    )
+    assert report.segments

@@ -99,7 +99,7 @@ def render_option_selector_branch(
                     "vega": c.vega,
                 }
             )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch")
         for item in result.ranked:
             with st.expander(f"#{item.rank} {item.contract.right} ${item.contract.strike:.0f}"):
                 st.write(item.rationale)

@@ -115,7 +115,7 @@ def render_dashboard(
                     "sync": status,
                 }
             )
-        st.dataframe(pd.DataFrame(acct_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(acct_rows), width="stretch", hide_index=True)
 
     # Block 2 — Where is risk
     st.subheader("Where is risk")
@@ -201,7 +201,7 @@ def render_dashboard(
                 row["flag"] = ""
         st.dataframe(
             pd.DataFrame(risk_rows),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -226,7 +226,7 @@ def render_dashboard(
                 "open_positions",
             ]
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -338,7 +338,7 @@ def _render_exit_efficiency_card(repo: Repository) -> None:
                     ),
                 }
             )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def _render_positions_table(
@@ -361,7 +361,7 @@ def _render_positions_table(
                 "notional": p.current_delta_notional,
             }
         )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     stop_rows = []
     for p in holdings:
@@ -467,7 +467,7 @@ def _render_sizing_efficiency_card(events: list, settings: AppSettings) -> None:
                 }
             )
         if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         else:
             st.caption("No closed trades for evaluation yet.")
 

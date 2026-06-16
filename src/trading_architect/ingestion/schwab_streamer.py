@@ -303,6 +303,13 @@ class StreamerClient:
             try:
                 self._loop.run_until_complete(self._session_main())
                 backoff = _BACKOFF_INITIAL
+            except SchwabAuthExpired:
+                logger.warning(
+                    "Schwab Streamer stopped: authentication expired. "
+                    "Reconnect with `ta fetch-schwab --login` or reauthenticate in Settings."
+                )
+                self._connected.clear()
+                break
             except Exception:
                 logger.exception("Schwab Streamer session ended")
                 self._connected.clear()

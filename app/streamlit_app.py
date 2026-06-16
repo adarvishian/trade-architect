@@ -426,7 +426,7 @@ elif page == "Accounts":
                     }
                     for b in snapshot.accounts
                 ]
-                st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(bal_rows), width="stretch", hide_index=True)
                 c1, c2 = st.columns(2)
                 c1.metric(
                     "Total cash & equivalents", f"${snapshot.total_cash_and_equivalents:,.2f}"
@@ -446,7 +446,7 @@ elif page == "Accounts":
                                 "by_account": holding_breakdown(h),
                             }
                         )
-                    st.dataframe(pd.DataFrame(hold_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(hold_rows), width="stretch", hide_index=True)
 
                 if st.button("Use total portfolio equity as stock/options starting equity"):
                     settings.starting_equity_stock_options = snapshot.total_portfolio_equity
@@ -526,7 +526,7 @@ elif page == "Accounts":
                     }
                     for b in schwab_snapshot.accounts
                 ]
-                st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(bal_rows), width="stretch", hide_index=True)
                 c1, c2 = st.columns(2)
                 c1.metric(
                     "Total cash & equivalents",
@@ -546,7 +546,7 @@ elif page == "Accounts":
                                 "by_account": holding_breakdown(h),
                             }
                         )
-                    st.dataframe(pd.DataFrame(hold_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(hold_rows), width="stretch", hide_index=True)
 
             st.divider()
             st.subheader("Transaction import")
@@ -594,7 +594,7 @@ elif page == "Accounts":
     st.subheader("Import history")
     log = repo.list_import_log(limit=20)
     if log:
-        st.dataframe(pd.DataFrame(log), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(log), width="stretch", hide_index=True)
     else:
         st.caption("No imports yet.")
 
@@ -750,7 +750,7 @@ elif page == "Size a Trade":
                 }
                 for layer in rec.layers
             ]
-            st.dataframe(pd.DataFrame(layer_rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(layer_rows), width="stretch")
 
 elif page == "Settings":
     st.header("Settings")
@@ -994,7 +994,7 @@ elif page == "Settings":
                         for e in log
                     ]
                 ),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
         else:
@@ -1042,7 +1042,7 @@ elif page == "Settings":
             {"label": label, "hash_prefix": f"{hash_val[:8]}…"}
             for label, hash_val in sorted(draft.schwab_account_hashes.items())
         ]
-        st.dataframe(pd.DataFrame(mapping_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(mapping_rows), width="stretch", hide_index=True)
         new_label = st.text_input("Add label", value="", key="schwab_new_label")
         new_hash = st.text_input("Hash value", value="", key="schwab_new_hash")
         if st.button("Add mapping", key="schwab_add_mapping") and new_label and new_hash:
