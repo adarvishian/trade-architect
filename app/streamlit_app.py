@@ -99,7 +99,9 @@ def load_session_data():
     from trading_architect.engines.marks import default_marks_provider
     from trading_architect.services.book_metrics import maybe_record_daily_metrics
 
-    maybe_record_daily_metrics(repo, book, settings=settings, marks_provider=default_marks_provider())
+    maybe_record_daily_metrics(
+        repo, book, settings=settings, marks_provider=default_marks_provider()
+    )
     return repo, settings, events, positions, book
 
 
@@ -148,10 +150,14 @@ elif page == "Accounts":
             status = sync.status if sync else "ok"
             as_of = card["as_of"]
             as_of_text = as_of.strftime("%Y-%m-%d %H:%M UTC") if as_of else "—"
-            icon = {"ok": "🟢", "stale": "🟡", "auth_required": "🔴", "error": "🔴"}.get(status, "⚪")
+            icon = {"ok": "🟢", "stale": "🟡", "auth_required": "🔴", "error": "🔴"}.get(
+                status, "⚪"
+            )
             cols = st.columns([2, 1, 1, 1, 1])
             cols[0].markdown(f"**{card['label']}** ({card['institution'] or card['kind']})")
-            cols[1].metric("Value", f"${card['equity_value']:,.0f}" if card["equity_value"] else "—")
+            cols[1].metric(
+                "Value", f"${card['equity_value']:,.0f}" if card["equity_value"] else "—"
+            )
             cols[2].metric("Cash", f"${card['cash']:,.0f}" if card["cash"] is not None else "—")
             cols[3].caption(f"As of {as_of_text}")
             cols[4].caption(f"{icon} {status}")
@@ -305,7 +311,9 @@ elif page == "Accounts":
             if using_env:
                 st.info(f"Using credentials from environment (RH_USERNAME={env_user}).")
             else:
-                st.caption("Credentials are used for this session only — never stored in the database.")
+                st.caption(
+                    "Credentials are used for this session only — never stored in the database."
+                )
 
             username = st.text_input(
                 "Robinhood email",
@@ -418,7 +426,9 @@ elif page == "Accounts":
                 ]
                 st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
                 c1, c2 = st.columns(2)
-                c1.metric("Total cash & equivalents", f"${snapshot.total_cash_and_equivalents:,.2f}")
+                c1.metric(
+                    "Total cash & equivalents", f"${snapshot.total_cash_and_equivalents:,.2f}"
+                )
                 c2.metric("Total portfolio equity", f"${snapshot.total_portfolio_equity:,.2f}")
 
                 if snapshot.holdings:
@@ -517,7 +527,8 @@ elif page == "Accounts":
                 st.dataframe(pd.DataFrame(bal_rows), use_container_width=True, hide_index=True)
                 c1, c2 = st.columns(2)
                 c1.metric(
-                    "Total cash & equivalents", f"${schwab_snapshot.total_cash_and_equivalents:,.2f}"
+                    "Total cash & equivalents",
+                    f"${schwab_snapshot.total_cash_and_equivalents:,.2f}",
                 )
                 c2.metric("Total MTM equity", f"${schwab_snapshot.total_portfolio_equity:,.2f}")
                 if schwab_snapshot.holdings:
@@ -624,12 +635,21 @@ elif page == "Size a Trade":
 
     silo_cash, silo_bp = silo_brokerage_liquidity(repo, silo)
     cash_label = f"${silo_cash:,.0f}" if silo_cash is not None else "—"
+    exposure_preview = book.exposure_for_silo(silo, repo=repo, settings=settings)
+    capital_label = (
+        f"${exposure_preview.capital_base:,.0f}"
+        if exposure_preview.capital_base is not None
+        else f"${silo_state.equity:,.0f} (silo equity)"
+    )
     st.subheader("Book context")
     st.caption(
-        f"Silo equity **${silo_state.equity:,.0f}** · open risk **${silo_state.open_dollar_risk:,.0f}** · "
+        f"Silo equity **${silo_state.equity:,.0f}** · capital base **{capital_label}** · "
+        f"open risk **${silo_state.open_dollar_risk:,.0f}** · "
         f"brokerage cash **{cash_label}** · drawdown **{book.effective_drawdown_pct:.1%}** "
         f"({book.effective_governor.state.value})"
     )
+    if exposure_preview.capital_base_detail:
+        st.caption(exposure_preview.capital_base_detail)
     if silo_cash is None:
         st.warning("Brokerage cash unavailable — sizing will not apply a cash cap.")
 
@@ -764,19 +784,49 @@ elif page == "Settings":
                 key="set_reserve_months",
             )
         )
-        draft.cluster_stress_pct = st.number_input(
-            "Cluster stress gap (%) — arithmetic scenario, not a forecast",
-            value=float(draft.cluster_stress_pct) * 100.0,
-            min_value=-50.0,
-            max_value=0.0,
-            step=1.0,
-            key="set_cluster_stress",
-        ) / 100.0
+        draft.cluster_stress_pct = (
+            st.number_input(
+                "Cluster stress gap (%) — arithmetic scenario, not a forecast",
+                value=float(draft.cluster_stress_pct) * 100.0,
+                min_value=-50.0,
+                max_value=0.0,
+                step=1.0,
+                key="set_cluster_stress",
+            )
+            / 100.0
+        )
         net = draft.monthly_income_after_tax - draft.monthly_expenses
         reserve_amt = draft.cash_reserve_months * draft.monthly_expenses
         st.caption(
             f"Monthly net cashflow: **${net:,.0f}** · Reserve held back: **${reserve_amt:,.0f}**"
         )
+        st.subheader("Sizing capital base")
+        draft.capital_base_mode = st.selectbox(
+            "Capital base for sizing",
+            options=["deployable", "silo_equity", "blend"],
+            index=["deployable", "silo_equity", "blend"].index(draft.capital_base_mode),
+            help=(
+                "Deployable = brokerage cash + transferable manual cash (minus reserve). "
+                "Silo equity = starting equity + P&L + open MTM. "
+                "Blend = weighted mix of both."
+            ),
+            key="set_capital_base_mode",
+        )
+        draft.include_forward_income = st.checkbox(
+            "Include forward monthly net cashflow in deployable pool",
+            value=bool(draft.include_forward_income),
+            help="Off by default — sizes on cash you hold today, not unearned income.",
+            key="set_include_forward_income",
+        )
+        if draft.capital_base_mode == "blend":
+            draft.capital_base_blend_pct = st.slider(
+                "Deployable weight in blend",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(draft.capital_base_blend_pct),
+                step=0.05,
+                key="set_capital_blend_pct",
+            )
 
     with tab_sizing:
         sc = draft.sizing
@@ -838,7 +888,9 @@ elif page == "Settings":
             existing_earn = repo.get_earnings_date(earn_underlying) if earn_underlying else None
             earn_date = st.date_input(
                 "Next earnings date",
-                value=existing_earn.earnings_date if existing_earn and existing_earn.earnings_date else date.today(),
+                value=existing_earn.earnings_date
+                if existing_earn and existing_earn.earnings_date
+                else date.today(),
                 key="earn_date",
             )
             if st.button("Save earnings date", key="save_earnings") and earn_underlying:

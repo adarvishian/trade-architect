@@ -82,8 +82,21 @@ def test_deployable_with_brokerage_and_transferable(repo: Repository):
     assert breakdown.reserve_held == pytest.approx(30_000.0)
     assert breakdown.transferable_cash == pytest.approx(20_000.0)
     assert breakdown.monthly_net_cashflow == pytest.approx(3_000.0)
-    assert breakdown.deployable_total == pytest.approx(28_000.0)
+    assert breakdown.deployable_total == pytest.approx(25_000.0)
     assert breakdown.total_capital == pytest.approx(105_000.0)
+
+
+def test_deployable_includes_forward_income_when_enabled(repo: Repository):
+    _broker_balance(repo, "schwab-tos", 5_000.0)
+    _manual_balance(repo, "bank-checking", 50_000.0)
+    settings = AppSettings(
+        monthly_income_after_tax=8_000.0,
+        monthly_expenses=5_000.0,
+        cash_reserve_months=6,
+        include_forward_income=True,
+    )
+    breakdown = deployable_capital(repo, settings)
+    assert breakdown.deployable_total == pytest.approx(28_000.0)
 
 
 def test_negative_net_cashflow(repo: Repository):
@@ -95,7 +108,7 @@ def test_negative_net_cashflow(repo: Repository):
     )
     breakdown = deployable_capital(repo, settings)
     assert breakdown.monthly_net_cashflow == pytest.approx(-2_000.0)
-    assert breakdown.deployable_total == pytest.approx(0.0)
+    assert breakdown.deployable_total == pytest.approx(2_000.0)
 
 
 def test_zero_accounts(repo: Repository):

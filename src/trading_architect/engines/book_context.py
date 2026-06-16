@@ -66,10 +66,23 @@ class BookContext:
 
         state = self.stock_options if silo == Silo.STOCK_OPTIONS else self.futures
         cash = buying_power = None
+        capital_base = None
+        capital_base_detail = None
+        capital_base_warnings: tuple[str, ...] = ()
+
         if repo is not None:
-            from trading_architect.engines.capital import silo_brokerage_liquidity
+            from trading_architect.engines.capital import (
+                resolve_capital_base,
+                silo_brokerage_liquidity,
+            )
 
             cash, buying_power = silo_brokerage_liquidity(repo, silo)
+            if settings is not None:
+                base = resolve_capital_base(repo, settings, silo, state.equity)
+                capital_base = base.amount
+                capital_base_detail = base.detail
+                capital_base_warnings = base.warnings
+
         return SiloExposure(
             silo_equity=state.equity,
             open_dollar_risk=state.open_dollar_risk,
@@ -78,6 +91,9 @@ class BookContext:
             peak_equity=state.peak_equity,
             available_cash=cash,
             buying_power=buying_power,
+            capital_base=capital_base,
+            capital_base_detail=capital_base_detail,
+            capital_base_warnings=capital_base_warnings,
         )
 
 

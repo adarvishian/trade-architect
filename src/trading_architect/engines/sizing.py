@@ -63,6 +63,15 @@ class SiloExposure:
     peak_equity: float | None = None
     available_cash: float | None = None
     buying_power: float | None = None
+    capital_base: float | None = None
+    capital_base_detail: str | None = None
+    capital_base_warnings: tuple[str, ...] = ()
+
+
+def _effective_capital(exposure: SiloExposure) -> float:
+    if exposure.capital_base is not None:
+        return exposure.capital_base
+    return exposure.silo_equity
 
 
 @dataclass
@@ -87,6 +96,8 @@ class SizeRecommendation:
     leverage_after: float = 0.0
     kelly_target_f: float | None = None
     warnings: list[str] = field(default_factory=list)
+    capital_base: float | None = None
+    capital_base_detail: str | None = None
 
 
 def _effective_f_for_equity(
@@ -210,18 +221,19 @@ def _compute_sizing_layers(
     rpu: float,
     events: list[TradeEvent] | None,
     optimal_f_override: float | None,
+    capital: float,
 ) -> _LayerQuantities:
     layers: list[LayerResult] = []
     warnings: list[str] = []
 
-    qty_l2 = fractional_risk_size(exposure.silo_equity, effective_f, rpu)
+    qty_l2 = fractional_risk_size(capital, effective_f, rpu)
     layers.append(
         LayerResult(
             layer=2,
             name="Fractional risk",
             recommended_qty=qty_l2,
             effective_f=effective_f,
-            detail=f"{effective_f:.2%} × ${exposure.silo_equity:,.0f} equity / ${rpu:,.2f} risk per unit ({tier_label})",
+            detail=f"{effective_f:.2%} × ${capital:,.0f} capital base / ${rpu:,.2f} risk per unit ({tier_label})",
         )
     )
 
@@ -240,7 +252,7 @@ def _compute_sizing_layers(
             else optimal_f
         )
         kelly_f_used = base_kelly_f * cfg.kelly_fraction * throttle_mult
-        qty_l3 = fractional_risk_size(exposure.silo_equity, kelly_f_used, rpu)
+        qty_l3 = fractional_risk_size(capital, kelly_f_used, rpu)
         ci_note = "lower-CI optimal-f" if optimal_f_lower is not None else "point optimal-f"
         layers.append(
             LayerResult(
@@ -291,19 +303,20 @@ def _apply_heat_leverage_caps(
     qty_pre_cap: float,
     rpu: float,
     layers: list[LayerResult],
+    capital: float,
 ) -> _CapResult:
     max_qty_heat = float("inf")
     max_qty_lev = float("inf")
     notional_per = _notional_per_unit(candidate)
 
-    remaining_heat_budget = cfg.heat_cap * exposure.silo_equity - exposure.open_dollar_risk
+    remaining_heat_budget = cfg.heat_cap * capital - exposure.open_dollar_risk
     if remaining_heat_budget <= 0:
         max_qty_heat = 0.0
     else:
         max_qty_heat = remaining_heat_budget / rpu
 
     if notional_per > 0:
-        remaining_notional = cfg.leverage_cap * exposure.silo_equity - exposure.open_delta_notional
+        remaining_notional = cfg.leverage_cap * capital - exposure.open_delta_notional
         max_qty_lev = max(0.0, remaining_notional / notional_per) if remaining_notional > 0 else 0.0
 
     qty_final = max(min(qty_pre_cap, max_qty_heat, max_qty_lev), 0.0)
@@ -318,8 +331,8 @@ def _apply_heat_leverage_caps(
     else:
         delta_notional = qty_final * notional_per
 
-    heat_after = portfolio_heat(exposure.open_dollar_risk + dollar_risk, exposure.silo_equity)
-    lev_after = leverage_ratio(exposure.open_delta_notional + delta_notional, exposure.silo_equity)
+    heat_after = portfolio_heat(exposure.open_dollar_risk + dollar_risk, capital)
+    lev_after = leverage_ratio(exposure.open_delta_notional + delta_notional, capital)
 
     layers.append(
         LayerResult(
@@ -366,7 +379,9 @@ def _apply_cash_cap(
         cost_per_unit = premium * OPTION_CONTRACT_MULTIPLIER
         if cost_per_unit > 0:
             max_qty_cash = cash / cost_per_unit
-            detail = f"Cash ${cash:,.0f} / ${cost_per_unit:,.0f} per contract → max {max_qty_cash:.1f}"
+            detail = (
+                f"Cash ${cash:,.0f} / ${cost_per_unit:,.0f} per contract → max {max_qty_cash:.1f}"
+            )
     elif candidate.asset_type == AssetType.STOCK:
         spot = candidate.spot_price or candidate.entry_price
         liquidity = max(cash, buying_power)
@@ -529,9 +544,11 @@ def recommend_size(
     if throttle_msg:
         warnings.append(throttle_msg)
 
-    tier_f, tier_label = _effective_f_for_equity(
-        exposure.silo_equity, cfg.base_risk_f, cfg.equity_tiers
-    )
+    capital = _effective_capital(exposure)
+    if exposure.capital_base_warnings:
+        warnings.extend(exposure.capital_base_warnings)
+
+    tier_f, tier_label = _effective_f_for_equity(capital, cfg.base_risk_f, cfg.equity_tiers)
     effective_f = tier_f * throttle_mult
 
     layer_out = _compute_sizing_layers(
@@ -545,6 +562,7 @@ def recommend_size(
         rpu=rpu,
         events=events,
         optimal_f_override=optimal_f_override,
+        capital=capital,
     )
     warnings.extend(layer_out.warnings)
 
@@ -555,6 +573,7 @@ def recommend_size(
         qty_pre_cap=layer_out.qty_pre_cap,
         rpu=rpu,
         layers=layer_out.layers,
+        capital=capital,
     )
 
     qty_after_cash, max_qty_cash = _apply_cash_cap(
@@ -576,8 +595,8 @@ def recommend_size(
     else:
         delta_notional = qty_after_cash * _notional_per_unit(candidate)
 
-    heat_after = portfolio_heat(exposure.open_dollar_risk + dollar_risk, exposure.silo_equity)
-    lev_after = leverage_ratio(exposure.open_delta_notional + delta_notional, exposure.silo_equity)
+    heat_after = portfolio_heat(exposure.open_dollar_risk + dollar_risk, capital)
+    lev_after = leverage_ratio(exposure.open_delta_notional + delta_notional, capital)
 
     binding = _resolve_binding_constraint(
         candidate=candidate,
@@ -604,6 +623,8 @@ def recommend_size(
         cfg=cfg,
         max_qty_heat=cap_out.max_qty_heat,
     )
+    if exposure.capital_base_detail:
+        rationale = exposure.capital_base_detail + "\n\n" + rationale
 
     return SizeRecommendation(
         recommended_qty=qty_after_cash,
@@ -617,6 +638,8 @@ def recommend_size(
         leverage_after=lev_after,
         kelly_target_f=layer_out.kelly_f_used,
         warnings=warnings,
+        capital_base=capital,
+        capital_base_detail=exposure.capital_base_detail,
     )
 
 
@@ -625,13 +648,19 @@ def format_size_recommendation(rec: SizeRecommendation) -> str:
     lines = [
         "Size Recommendation",
         "=" * 40,
-        rec.rationale.replace("**", ""),
-        "",
-        f"Binding: {rec.binding_constraint.value}",
-        f"Qty: {rec.recommended_qty:.2f} (whole: {rec.recommended_qty_int})",
-        f"Risk: ${rec.dollar_risk:,.0f} | Notional: ${rec.delta_notional:,.0f}",
-        f"Heat after: {rec.heat_after:.1%} | Leverage after: {rec.leverage_after:.2f}×",
     ]
+    if rec.capital_base is not None:
+        lines.append(f"Capital base: ${rec.capital_base:,.0f}")
+    lines.extend(
+        [
+            rec.rationale.replace("**", ""),
+            "",
+            f"Binding: {rec.binding_constraint.value}",
+            f"Qty: {rec.recommended_qty:.2f} (whole: {rec.recommended_qty_int})",
+            f"Risk: ${rec.dollar_risk:,.0f} | Notional: ${rec.delta_notional:,.0f}",
+            f"Heat after: {rec.heat_after:.1%} | Leverage after: {rec.leverage_after:.2f}×",
+        ]
+    )
     if rec.kelly_target_f is not None:
         lines.append(f"Kelly target f: {rec.kelly_target_f:.3%}")
     lines.append("")
